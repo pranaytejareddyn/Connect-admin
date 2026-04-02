@@ -143,6 +143,7 @@
       <div class="nav-item" id="nav-alerts">🚨 Alerts <span class="nav-badge" id="badge-alerts" style="display:none">0</span></div>
       <div class="nav-item" id="nav-chats">💬 Chats</div>
       <div class="nav-item" id="nav-reviews">⭐ Reviews</div>
+      <div class="nav-item" id="nav-verification">🛡️ Verification <span class="nav-badge" id="badge-verification" style="display:none">0</span></div>
     </nav>
     <div class="sidebar-footer">
       <div class="admin-info" id="admin-info">—</div>
@@ -211,6 +212,19 @@
       <div class="page-sub">All user reviews for helpers</div>
       <div class="card"><div id="reviews-table"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
     </div>
+
+    <div class="page" id="page-verification">
+      <div class="page-title">🛡️ Helper Verification</div>
+      <div class="page-sub">Review and approve helper identity documents</div>
+      <div class="filter-bar" id="verification-filters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="pending">⏳ Pending Review</button>
+        <button class="filter-btn" data-filter="verified">✅ Verified</button>
+        <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
+        <button class="filter-btn" data-filter="not_submitted">📋 Not Submitted</button>
+      </div>
+      <div class="card"><div id="verification-table"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
+    </div>
   </div>
 </div>
 
@@ -235,7 +249,9 @@
   const db = firebase.firestore();
 
   let helpers=[], users=[], alerts=[], chats=[], reviews=[];
-  let helperFilter='all', alertFilter='all';
+  let helperFilter='all', alertFilter='all', verificationFilter='all';
+
+window.addEventListener('DOMContentLoaded', function() {
 
   // Auth
   document.getElementById('login-btn').onclick = function() {
@@ -272,7 +288,7 @@
   });
 
   // Navigation
-  ['overview','helpers','users','alerts','chats','reviews'].forEach(function(page) {
+  ['overview','helpers','users','alerts','chats','reviews','verification'].forEach(function(page) {
     document.getElementById('nav-'+page).addEventListener('click', function() {
       document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
       document.querySelectorAll('.nav-item').forEach(function(n){n.classList.remove('active');});
@@ -288,6 +304,14 @@
     document.querySelectorAll('#helper-filters .filter-btn').forEach(function(b){b.classList.remove('active');});
     e.target.classList.add('active');
     renderHelpers();
+  });
+
+  document.getElementById('verification-filters').addEventListener('click', function(e) {
+    if(!e.target.classList.contains('filter-btn')) return;
+    verificationFilter = e.target.dataset.filter;
+    document.querySelectorAll('#verification-filters .filter-btn').forEach(function(b){b.classList.remove('active');});
+    e.target.classList.add('active');
+    renderVerification();
   });
 
   document.getElementById('alert-filters').addEventListener('click', function(e) {
@@ -306,6 +330,7 @@
   // Load
   async function loadAll() {
     await Promise.all([loadHelpers(),loadUsers(),loadAlerts(),loadChats(),loadReviews()]);
+    renderVerification();
     updateStats(); renderOverview();
   }
 
@@ -520,7 +545,97 @@
   function coverCount(a) { if(a.coverageType==='Villages') return (a.selectedVillages||[]).length+' villages'; if(a.coverageType==='Districts') return (a.selectedDistricts||[]).length+' districts'; if(a.coverageType==='States') return (a.selectedStates||[]).length+' states'; return '—'; }
   function coverList(a) { if(a.coverageType==='Villages') return (a.selectedVillages||[]).join(', ')||'—'; if(a.coverageType==='Districts') return (a.selectedDistricts||[]).join(', ')||'—'; if(a.coverageType==='States') return (a.selectedStates||[]).join(', ')||'—'; return '—'; }
   function mf(label,value) { return '<div class="modal-field"><div class="modal-label">'+label+'</div><div class="modal-value">'+value+'</div></div>'; }
+  // Verification functions
+  function renderVerification() {
+    var filtered = helpers.filter(function(h) {
+      var vs = h.verificationStatus || 'not_submitted';
+      return verificationFilter === 'all' ? true : vs === verificationFilter;
+    });
+    var el = document.getElementById('verification-table');
+    // Update badge
+    var pending = helpers.filter(function(h){ return h.verificationStatus === 'pending'; }).length;
+    var bv = document.getElementById('badge-verification');
+    bv.textContent = pending; bv.style.display = pending > 0 ? 'inline' : 'none';
+
+    if(filtered.length === 0) { el.innerHTML = emptyState('🛡️','No helpers found','No helpers match this filter.'); return; }
+    el.innerHTML = '<table class="table"><thead><tr><th>Helper</th><th>Location</th><th>Documents</th><th>Verification Status</th><th>Actions</th></tr></thead><tbody>'+
+      filtered.map(function(h) {
+        var vs = h.verificationStatus || 'not_submitted';
+        var hasDocs = (h.documents && (h.documents.selfie || h.documents.aadhar || h.documents.addressProof));
+        var docCount = h.documents ? [h.documents.selfie, h.documents.aadhar, h.documents.addressProof].filter(Boolean).length : 0;
+        return '<tr><td><div class="user-cell"><div class="avatar">'+(h.name||'?')[0].toUpperCase()+'</div>'+
+          '<div><div class="user-name">'+(h.name||'Unknown')+'</div><div class="user-phone">'+(h.phone||'')+'</div></div></div></td>'+
+          '<td>'+(h.village||'')+', '+(h.district||'')+'</td>'+
+          '<td>'+(hasDocs ? '<span class="badge badge-blue">'+docCount+' docs uploaded</span>' : '<span style="color:var(--text-muted)">None</span>')+'</td>'+
+          '<td><span class="badge badge-'+(vs==='verified'?'approved':vs==='pending'?'pending':vs==='rejected'?'rejected':'blue')+'">'+
+            (vs==='verified'?'✅ Verified':vs==='pending'?'⏳ Pending':vs==='rejected'?'❌ Rejected':'📋 Not Submitted')+'</span></td>'+
+          '<td><div class="btn-actions">'+
+            '<button class="btn btn-view" onclick="viewVerification(''+h.id+'')" '+(hasDocs?'':'disabled style="opacity:0.5"')+'>👁 View Docs</button>'+
+            (vs === 'pending' ? 
+              '<button class="btn btn-approve" onclick="verifyHelper(''+h.id+'')" >✅ Verify</button>'+
+              '<button class="btn btn-reject" onclick="rejectVerification(''+h.id+'')" >❌ Reject</button>' : '')+
+          '</div></td></tr>';
+      }).join('')+'</tbody></table>';
+  }
+
+  function viewVerification(id) {
+    var h = helpers.find(function(x){return x.id===id;});
+    if(!h) return;
+    var vs = h.verificationStatus || 'not_submitted';
+    var docs = h.documents || {};
+    showModal('<div class="modal-title">🛡️ Verification — '+( h.name||'Helper')+'</div>'+
+      mf('Helper', h.name||'—') + mf('Phone', h.phone||'—') +
+      mf('Location', (h.village||'')+', '+(h.district||'')) +
+      mf('Status', '<span class="badge badge-'+(vs==='verified'?'approved':vs==='pending'?'pending':vs==='rejected'?'rejected':'blue')+'">'+
+        (vs==='verified'?'✅ Verified':vs==='pending'?'⏳ Pending Review':vs==='rejected'?'❌ Rejected':'📋 Not Submitted')+'</span>') +
+      (h.verificationRejectionReason ? mf('Rejection Reason', '<span style="color:var(--red)">'+h.verificationRejectionReason+'</span>') : '') +
+      '<div class="modal-field"><div class="modal-label">Submitted Documents</div>'+
+      '<div class="modal-photos" style="margin-top:8px">'+
+        (docs.selfie ? '<div style="text-align:center"><a href="'+docs.selfie+'" target="_blank"><img src="'+docs.selfie+'" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Selfie</div></div>' : '') +
+        (docs.aadhar ? '<div style="text-align:center"><a href="'+docs.aadhar+'" target="_blank"><img src="'+docs.aadhar+'" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Aadhaar</div></div>' : '') +
+        (docs.addressProof ? '<div style="text-align:center"><a href="'+docs.addressProof+'" target="_blank"><img src="'+docs.addressProof+'" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Address Proof</div></div>' : '') +
+        (!docs.selfie && !docs.aadhar && !docs.addressProof ? '<span style="color:var(--text-muted)">No documents uploaded yet</span>' : '') +
+      '</div></div>'+
+      '<div class="modal-footer">'+
+        (vs === 'pending' ?
+          '<button class="btn btn-reject" onclick="rejectVerification(''+h.id+'');closeModal()">❌ Reject</button>'+
+          '<button class="btn btn-approve" onclick="verifyHelper(''+h.id+'');closeModal()">✅ Verify Helper</button>' :
+          '<button class="btn btn-view" onclick="closeModal()">Close</button>')+
+      '</div>');
+  }
+
+  async function verifyHelper(id) {
+    try {
+      await db.collection('helpers').doc(id).update({
+        verificationStatus: 'verified',
+        isVerified: true,
+        verifiedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        verificationRejectionReason: null,
+      });
+      var h = helpers.find(function(x){return x.id===id;}); 
+      if(h) { h.verificationStatus='verified'; h.isVerified=true; }
+      showToast('✅ Helper verified! Badge added to profile.','success');
+      renderVerification();
+    } catch(e){ showToast('Error: '+e.message,'error'); }
+  }
+
+  async function rejectVerification(id) {
+    var reason = prompt('Enter rejection reason (optional):') || 'Documents not clear or invalid.';
+    try {
+      await db.collection('helpers').doc(id).update({
+        verificationStatus: 'rejected',
+        isVerified: false,
+        verificationRejectionReason: reason,
+      });
+      var h = helpers.find(function(x){return x.id===id;}); 
+      if(h) { h.verificationStatus='rejected'; h.isVerified=false; h.verificationRejectionReason=reason; }
+      showToast('Verification rejected. Helper notified.','error');
+      renderVerification();
+    } catch(e){ showToast('Error: '+e.message,'error'); }
+  }
+
   function emptyState(emoji,title,sub) { return '<div class="empty-state"><div class="empty-emoji">'+emoji+'</div><div class="empty-title">'+title+'</div><div class="empty-sub">'+sub+'</div></div>'; }
+}); // end DOMContentLoaded
 </script>
 </body>
 </html>
