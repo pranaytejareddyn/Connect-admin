@@ -119,7 +119,7 @@
     <div class="login-sub">Platform management dashboard</div>
     <input class="login-input" type="email" id="admin-email" placeholder="Admin Email" />
     <input class="login-input" type="password" id="admin-password" placeholder="Password" />
-    <button class="login-btn" id="login-btn">Sign In →</button>
+    <button class="login-btn" onclick="doLogin()">Sign In →</button>
     <div class="login-error" id="login-error"></div>
     <div class="login-note">
       📌 First time? Go to Firebase Console → Authentication → Sign-in method → Enable Email/Password → Users tab → Add user
@@ -251,19 +251,21 @@
   let helpers=[], users=[], alerts=[], chats=[], reviews=[];
   let helperFilter='all', alertFilter='all', verificationFilter='all';
 
-window.addEventListener('DOMContentLoaded', function() {
-
-  // Auth
-  document.getElementById('login-btn').onclick = function() {
-    const email = document.getElementById('admin-email').value.trim();
-    const pass = document.getElementById('admin-password').value;
-    const errEl = document.getElementById('login-error');
+// Auth
+  window.doLogin = function() {
+    var email = document.getElementById('admin-email').value.trim();
+    var pass = document.getElementById('admin-password').value;
+    var errEl = document.getElementById('login-error');
+    var btn = document.getElementById('login-btn');
+    if (!email || !pass) { errEl.textContent = '❌ Please enter email and password.'; return; }
     errEl.textContent = '';
-    this.textContent = 'Signing in...';
-    this.disabled = true;
-    const btn = this;
-    auth.signInWithEmailAndPassword(email, pass).catch(function(e) {
-      errEl.textContent = '❌ ' + (e.code==='auth/wrong-password'?'Wrong password.':e.code==='auth/user-not-found'?'User not found. Create in Firebase Console.':e.message);
+    btn.textContent = 'Signing in...';
+    btn.disabled = true;
+    auth.signInWithEmailAndPassword(email, pass).then(function() {
+      btn.textContent = 'Sign In →';
+      btn.disabled = false;
+    }).catch(function(e) {
+      errEl.textContent = '❌ ' + (e.code==='auth/wrong-password'?'Wrong password.':e.code==='auth/user-not-found'?'User not found.':e.code==='auth/invalid-email'?'Invalid email.':e.message);
       btn.textContent = 'Sign In →';
       btn.disabled = false;
     });
@@ -635,7 +637,6 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   function emptyState(emoji,title,sub) { return '<div class="empty-state"><div class="empty-emoji">'+emoji+'</div><div class="empty-title">'+title+'</div><div class="empty-sub">'+sub+'</div></div>'; }
-}); // end DOMContentLoaded
 </script>
 </body>
 </html>
