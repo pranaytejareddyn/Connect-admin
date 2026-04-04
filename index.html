@@ -1,114 +1,113 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Connect Admin Dashboard</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    :root {
-      --blue: #2979FF; --blue-light: #E8F0FF;
-      --green: #2ECC71; --green-light: #E8FAF0; --green-dark: #1A8A4A;
-      --red: #E74C3C; --red-light: #FDECEA;
-      --orange: #F39C12; --orange-light: #FEF9E7;
-      --text: #1A1A2E; --text-sec: #64748B; --text-muted: #94A3B8;
-      --border: #E2E8F0; --bg: #F8FAFC; --white: #FFFFFF;
-      --shadow: 0 2px 8px rgba(0,0,0,0.08); --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
-    }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
-    #login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #1A1A2E 0%, #2979FF 100%); }
-    .login-card { background: white; border-radius: 20px; padding: 48px; width: 420px; box-shadow: var(--shadow-lg); text-align: center; }
-    .login-logo { font-size: 52px; margin-bottom: 8px; }
-    .login-title { font-size: 26px; font-weight: 800; color: var(--text); margin-bottom: 4px; }
-    .login-sub { font-size: 14px; color: var(--text-sec); margin-bottom: 32px; }
-    .login-input { width: 100%; padding: 14px 16px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 15px; margin-bottom: 12px; outline: none; display: block; }
-    .login-input:focus { border-color: var(--blue); }
-    .login-btn { width: 100%; padding: 14px; background: var(--blue); color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer; }
-    .login-error { color: var(--red); font-size: 13px; margin-top: 12px; min-height: 20px; }
-    .login-note { margin-top: 16px; font-size: 12px; color: var(--text-muted); background: var(--bg); padding: 10px; border-radius: 8px; line-height: 1.6; }
-    #app { display: none; min-height: 100vh; }
-    .sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: 240px; background: #1A1A2E; color: white; display: flex; flex-direction: column; z-index: 100; }
-    .sidebar-logo { padding: 24px 20px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; gap: 12px; }
-    .sidebar-logo-emoji { font-size: 28px; }
-    .sidebar-logo-text { font-size: 18px; font-weight: 800; }
-    .sidebar-logo-sub { font-size: 11px; opacity: 0.5; margin-top: 2px; }
-    .sidebar-nav { flex: 1; padding: 16px 0; }
-    .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 20px; cursor: pointer; font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.6); border-left: 3px solid transparent; transition: all 0.2s; }
-    .nav-item:hover { background: rgba(255,255,255,0.07); color: white; }
-    .nav-item.active { background: rgba(41,121,255,0.2); color: white; border-left-color: var(--blue); }
-    .nav-badge { margin-left: auto; background: var(--red); color: white; border-radius: 10px; padding: 2px 7px; font-size: 11px; font-weight: 700; }
-    .sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.1); }
-    .admin-info { font-size: 12px; color: rgba(255,255,255,0.4); margin-bottom: 8px; word-break: break-all; }
-    .signout-btn { width: 100%; padding: 10px; background: rgba(255,255,255,0.08); border: none; border-radius: 8px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; }
-    .signout-btn:hover { background: rgba(255,255,255,0.15); }
-    .main { margin-left: 240px; padding: 32px; }
-    .page { display: none; }
-    .page.active { display: block; }
-    .page-title { font-size: 24px; font-weight: 800; margin-bottom: 4px; }
-    .page-sub { font-size: 14px; color: var(--text-sec); margin-bottom: 28px; }
-    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
-    .stat-card { background: white; border-radius: 14px; padding: 20px; box-shadow: var(--shadow); border: 1px solid var(--border); }
-    .stat-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-    .stat-label { font-size: 13px; color: var(--text-sec); font-weight: 600; }
-    .stat-icon { font-size: 22px; }
-    .stat-value { font-size: 34px; font-weight: 800; }
-    .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-    .card { background: white; border-radius: 14px; padding: 20px; box-shadow: var(--shadow); border: 1px solid var(--border); margin-bottom: 20px; }
-    .card-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-    .cbadge { border-radius: 20px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
-    .cbadge-red { background: var(--red-light); color: var(--red); }
-    .cbadge-orange { background: var(--orange-light); color: var(--orange); }
-    .table { width: 100%; border-collapse: collapse; }
-    .table th { text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 700; color: var(--text-sec); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); background: var(--bg); }
-    .table td { padding: 14px; font-size: 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-    .table tr:last-child td { border-bottom: none; }
-    .table tr:hover td { background: #FAFBFF; }
-    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; }
-    .badge-pending { background: var(--orange-light); color: var(--orange); }
-    .badge-approved { background: var(--green-light); color: var(--green-dark); }
-    .badge-rejected { background: var(--red-light); color: var(--red); }
-    .badge-blue { background: var(--blue-light); color: var(--blue); }
-    .badge-high { background: var(--red-light); color: var(--red); }
-    .badge-medium { background: var(--orange-light); color: var(--orange); }
-    .badge-low { background: var(--green-light); color: var(--green-dark); }
-    .btn { padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; transition: all 0.2s; }
-    .btn-approve { background: var(--green-light); color: var(--green-dark); }
-    .btn-approve:hover { background: var(--green); color: white; }
-    .btn-reject { background: var(--red-light); color: var(--red); }
-    .btn-reject:hover { background: var(--red); color: white; }
-    .btn-view { background: var(--blue-light); color: var(--blue); }
-    .btn-view:hover { background: var(--blue); color: white; }
-    .btn-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-    .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--blue-light); display: inline-flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: var(--blue); flex-shrink: 0; }
-    .user-cell { display: flex; align-items: center; gap: 10px; }
-    .user-name { font-weight: 600; font-size: 14px; }
-    .user-phone { font-size: 12px; color: var(--text-sec); }
-    .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-    .filter-btn { padding: 7px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1.5px solid var(--border); background: white; color: var(--text-sec); transition: all 0.2s; }
-    .filter-btn.active { background: var(--blue); color: white; border-color: var(--blue); }
-    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
-    .modal { background: white; border-radius: 16px; padding: 28px; max-width: 580px; width: 100%; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow-lg); }
-    .modal-title { font-size: 20px; font-weight: 800; margin-bottom: 20px; }
-    .modal-field { margin-bottom: 14px; }
-    .modal-label { font-size: 11px; font-weight: 700; color: var(--text-sec); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-    .modal-value { font-size: 14px; line-height: 1.6; }
-    .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
-    .modal-photos { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
-    .modal-photo { width: 100px; height: 80px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
-    .empty-state { text-align: center; padding: 48px 20px; }
-    .empty-emoji { font-size: 44px; margin-bottom: 12px; }
-    .empty-title { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
-    .empty-sub { font-size: 14px; color: var(--text-sec); }
-    .loading { text-align: center; padding: 40px; color: var(--text-sec); }
-    .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .toast { position: fixed; bottom: 24px; right: 24px; color: white; padding: 14px 20px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow-lg); z-index: 9999; animation: slideUp 0.3s ease; }
-    .toast-success { background: var(--green); }
-    .toast-error { background: var(--red); }
-    .toast-info { background: var(--blue); }
-    @keyframes slideUp { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-    @media (max-width: 1000px) { .stats-grid { grid-template-columns: repeat(2,1fr); } }
-  </style>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Connect Admin</title>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#F8FAFC;color:#1A1A2E}
+:root{
+  --blue:#2979FF;--blue-light:#E8F0FF;
+  --green:#2ECC71;--green-light:#E8FAF0;--green-dark:#1A8A4A;
+  --red:#E74C3C;--red-light:#FDECEA;
+  --orange:#F39C12;--orange-light:#FEF9E7;
+  --text:#1A1A2E;--text-sec:#64748B;--text-muted:#94A3B8;
+  --border:#E2E8F0;--bg:#F8FAFC;
+  --shadow:0 2px 8px rgba(0,0,0,0.08);--shadow-lg:0 8px 24px rgba(0,0,0,0.12)
+}
+/* LOGIN */
+#login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1A1A2E,#2979FF)}
+.login-card{background:#fff;border-radius:20px;padding:48px;width:420px;box-shadow:var(--shadow-lg);text-align:center}
+.login-logo{font-size:52px;margin-bottom:8px}
+.login-title{font-size:26px;font-weight:800;margin-bottom:4px}
+.login-sub{font-size:14px;color:var(--text-sec);margin-bottom:32px}
+.login-input{width:100%;padding:14px 16px;border:1.5px solid var(--border);border-radius:10px;font-size:15px;margin-bottom:12px;outline:none;display:block;font-family:inherit}
+.login-input:focus{border-color:var(--blue)}
+.login-btn{width:100%;padding:14px;background:var(--blue);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit}
+.login-btn:hover{opacity:0.9}
+.login-btn:disabled{opacity:0.6;cursor:not-allowed}
+.login-error{color:var(--red);font-size:13px;margin-top:12px;min-height:20px}
+.login-note{margin-top:16px;font-size:12px;color:var(--text-muted);background:var(--bg);padding:10px;border-radius:8px;line-height:1.6}
+/* APP */
+#app{display:none;min-height:100vh}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:240px;background:#1A1A2E;color:#fff;display:flex;flex-direction:column;z-index:100}
+.sidebar-logo{padding:24px 20px;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:12px}
+.sidebar-logo-emoji{font-size:28px}
+.sidebar-logo-text{font-size:18px;font-weight:800}
+.sidebar-logo-sub{font-size:11px;opacity:0.5;margin-top:2px}
+.sidebar-nav{flex:1;padding:16px 0}
+.nav-item{display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;font-size:14px;font-weight:600;color:rgba(255,255,255,0.6);border-left:3px solid transparent;transition:all 0.2s;user-select:none}
+.nav-item:hover{background:rgba(255,255,255,0.07);color:#fff}
+.nav-item.active{background:rgba(41,121,255,0.2);color:#fff;border-left-color:var(--blue)}
+.nav-badge{margin-left:auto;background:var(--red);color:#fff;border-radius:10px;padding:2px 7px;font-size:11px;font-weight:700}
+.sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,0.1)}
+.admin-info{font-size:12px;color:rgba(255,255,255,0.4);margin-bottom:8px;word-break:break-all}
+.signout-btn{width:100%;padding:10px;background:rgba(255,255,255,0.08);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.signout-btn:hover{background:rgba(255,255,255,0.15)}
+.main{margin-left:240px;padding:32px}
+.page{display:none}.page.active{display:block}
+.page-title{font-size:24px;font-weight:800;margin-bottom:4px}
+.page-sub{font-size:14px;color:var(--text-sec);margin-bottom:28px}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:28px}
+.stat-card{background:#fff;border-radius:14px;padding:20px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.stat-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.stat-label{font-size:13px;color:var(--text-sec);font-weight:600}
+.stat-icon{font-size:22px}
+.stat-value{font-size:34px;font-weight:800}
+.stat-sub{font-size:12px;color:var(--text-muted);margin-top:4px}
+.card{background:#fff;border-radius:14px;padding:20px;box-shadow:var(--shadow);border:1px solid var(--border);margin-bottom:20px}
+.card-title{font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.cbadge{border-radius:20px;padding:2px 8px;font-size:12px;font-weight:700}
+.cbadge-red{background:var(--red-light);color:var(--red)}
+.cbadge-orange{background:var(--orange-light);color:var(--orange)}
+.table{width:100%;border-collapse:collapse}
+.table th{text-align:left;padding:10px 14px;font-size:12px;font-weight:700;color:var(--text-sec);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);background:var(--bg)}
+.table td{padding:14px;font-size:14px;border-bottom:1px solid var(--border);vertical-align:middle}
+.table tr:last-child td{border-bottom:none}
+.table tr:hover td{background:#FAFBFF}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700}
+.badge-pending{background:var(--orange-light);color:var(--orange)}
+.badge-approved{background:var(--green-light);color:var(--green-dark)}
+.badge-rejected{background:var(--red-light);color:var(--red)}
+.badge-blue{background:var(--blue-light);color:var(--blue)}
+.badge-high{background:var(--red-light);color:var(--red)}
+.badge-medium{background:var(--orange-light);color:var(--orange)}
+.badge-low{background:var(--green-light);color:var(--green-dark)}
+.btn{padding:7px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;border:none;transition:all 0.2s;font-family:inherit}
+.btn-approve{background:var(--green-light);color:var(--green-dark)}.btn-approve:hover{background:var(--green);color:#fff}
+.btn-reject{background:var(--red-light);color:var(--red)}.btn-reject:hover{background:var(--red);color:#fff}
+.btn-view{background:var(--blue-light);color:var(--blue)}.btn-view:hover{background:var(--blue);color:#fff}
+.btn-actions{display:flex;gap:6px;flex-wrap:wrap}
+.avatar{width:36px;height:36px;border-radius:50%;background:var(--blue-light);display:inline-flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:var(--blue);flex-shrink:0}
+.user-cell{display:flex;align-items:center;gap:10px}
+.user-name{font-weight:600;font-size:14px}
+.user-phone{font-size:12px;color:var(--text-sec)}
+.filter-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.filter-btn{padding:7px 14px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid var(--border);background:#fff;color:var(--text-sec);transition:all 0.2s;font-family:inherit}
+.filter-btn.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.modal{background:#fff;border-radius:16px;padding:28px;max-width:580px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-lg)}
+.modal-title{font-size:20px;font-weight:800;margin-bottom:20px}
+.modal-field{margin-bottom:14px}
+.modal-label{font-size:11px;font-weight:700;color:var(--text-sec);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
+.modal-value{font-size:14px;line-height:1.6}
+.modal-footer{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
+.modal-photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.modal-photo{width:100px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border)}
+.empty-state{text-align:center;padding:48px 20px}
+.empty-emoji{font-size:44px;margin-bottom:12px}
+.empty-title{font-size:17px;font-weight:700;margin-bottom:6px}
+.empty-sub{font-size:14px;color:var(--text-sec)}
+.loading{text-align:center;padding:40px;color:var(--text-sec)}
+.spinner{width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:24px;right:24px;color:#fff;padding:14px 20px;border-radius:10px;font-size:14px;font-weight:600;box-shadow:var(--shadow-lg);z-index:9999;animation:slideUp 0.3s ease}
+.toast-success{background:var(--green)}.toast-error{background:var(--red)}.toast-info{background:var(--blue)}
+@keyframes slideUp{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
+@media(max-width:1000px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
 </head>
 <body>
 
@@ -117,13 +116,11 @@
     <div class="login-logo">🤝</div>
     <div class="login-title">Connect Admin</div>
     <div class="login-sub">Platform management dashboard</div>
-    <input class="login-input" type="email" id="admin-email" placeholder="Admin Email" />
-    <input class="login-input" type="password" id="admin-password" placeholder="Password" />
-    <button class="login-btn" onclick="doLogin()">Sign In →</button>
+    <input class="login-input" type="email" id="admin-email" placeholder="Admin Email" autocomplete="email"/>
+    <input class="login-input" type="password" id="admin-password" placeholder="Password" autocomplete="current-password"/>
+    <button class="login-btn" id="login-btn" type="button">Sign In →</button>
     <div class="login-error" id="login-error"></div>
-    <div class="login-note">
-      📌 First time? Go to Firebase Console → Authentication → Sign-in method → Enable Email/Password → Users tab → Add user
-    </div>
+    <div class="login-note">📌 Go to Firebase Console → Authentication → Users → Add user with your email & password</div>
   </div>
 </div>
 
@@ -131,22 +128,19 @@
   <div class="sidebar">
     <div class="sidebar-logo">
       <div class="sidebar-logo-emoji">🤝</div>
-      <div>
-        <div class="sidebar-logo-text">Connect</div>
-        <div class="sidebar-logo-sub">Admin Panel</div>
-      </div>
+      <div><div class="sidebar-logo-text">Connect</div><div class="sidebar-logo-sub">Admin Panel</div></div>
     </div>
     <nav class="sidebar-nav">
-      <div class="nav-item active" id="nav-overview">📊 Overview</div>
-      <div class="nav-item" id="nav-helpers">🙋 Helpers <span class="nav-badge" id="badge-helpers" style="display:none">0</span></div>
-      <div class="nav-item" id="nav-users">👥 Users</div>
-      <div class="nav-item" id="nav-alerts">🚨 Alerts <span class="nav-badge" id="badge-alerts" style="display:none">0</span></div>
-      <div class="nav-item" id="nav-chats">💬 Chats</div>
-      <div class="nav-item" id="nav-reviews">⭐ Reviews</div>
-      <div class="nav-item" id="nav-verification">🛡️ Verification <span class="nav-badge" id="badge-verification" style="display:none">0</span></div>
+      <div class="nav-item active" data-page="overview">📊 Overview</div>
+      <div class="nav-item" data-page="helpers">🙋 Helpers <span class="nav-badge" id="badge-helpers" style="display:none">0</span></div>
+      <div class="nav-item" data-page="users">👥 Users</div>
+      <div class="nav-item" data-page="alerts">🚨 Alerts <span class="nav-badge" id="badge-alerts" style="display:none">0</span></div>
+      <div class="nav-item" data-page="verification">🛡️ Verification <span class="nav-badge" id="badge-verification" style="display:none">0</span></div>
+      <div class="nav-item" data-page="chats">💬 Chats</div>
+      <div class="nav-item" data-page="reviews">⭐ Reviews</div>
     </nav>
     <div class="sidebar-footer">
-      <div class="admin-info" id="admin-info">—</div>
+      <div class="admin-info" id="admin-info"></div>
       <button class="signout-btn" id="signout-btn">🚪 Sign Out</button>
     </div>
   </div>
@@ -161,14 +155,8 @@
         <div class="stat-card"><div class="stat-top"><div class="stat-label">Pending Review</div><div class="stat-icon">⏳</div></div><div class="stat-value" id="s-pending" style="color:var(--orange)">—</div><div class="stat-sub">Needs action</div></div>
         <div class="stat-card"><div class="stat-top"><div class="stat-label">Emergency Alerts</div><div class="stat-icon">🚨</div></div><div class="stat-value" id="s-alerts">—</div><div class="stat-sub">Total alerts</div></div>
       </div>
-      <div class="card">
-        <div class="card-title">⏳ Pending Helper Applications <span class="cbadge cbadge-red" id="pending-h-count">0</span></div>
-        <div id="overview-helpers"><div class="loading"><div class="spinner"></div>Loading...</div></div>
-      </div>
-      <div class="card">
-        <div class="card-title">🚨 Pending Emergency Alerts <span class="cbadge cbadge-orange" id="pending-a-count">0</span></div>
-        <div id="overview-alerts"><div class="loading"><div class="spinner"></div>Loading...</div></div>
-      </div>
+      <div class="card"><div class="card-title">⏳ Pending Helper Applications <span class="cbadge cbadge-red" id="pending-h-count">0</span></div><div id="overview-helpers"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
+      <div class="card"><div class="card-title">🚨 Pending Emergency Alerts <span class="cbadge cbadge-orange" id="pending-a-count">0</span></div><div id="overview-alerts"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
     </div>
 
     <div class="page" id="page-helpers">
@@ -201,6 +189,19 @@
       <div class="card"><div id="alerts-table"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
     </div>
 
+    <div class="page" id="page-verification">
+      <div class="page-title">🛡️ Helper Verification</div>
+      <div class="page-sub">Review and approve helper identity documents</div>
+      <div class="filter-bar" id="verification-filters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="pending">⏳ Pending</button>
+        <button class="filter-btn" data-filter="verified">✅ Verified</button>
+        <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
+        <button class="filter-btn" data-filter="not_submitted">📋 Not Submitted</button>
+      </div>
+      <div class="card"><div id="verification-table"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
+    </div>
+
     <div class="page" id="page-chats">
       <div class="page-title">💬 Chats</div>
       <div class="page-sub">All conversations between users and helpers</div>
@@ -212,431 +213,452 @@
       <div class="page-sub">All user reviews for helpers</div>
       <div class="card"><div id="reviews-table"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
     </div>
-
-    <div class="page" id="page-verification">
-      <div class="page-title">🛡️ Helper Verification</div>
-      <div class="page-sub">Review and approve helper identity documents</div>
-      <div class="filter-bar" id="verification-filters">
-        <button class="filter-btn active" data-filter="all">All</button>
-        <button class="filter-btn" data-filter="pending">⏳ Pending Review</button>
-        <button class="filter-btn" data-filter="verified">✅ Verified</button>
-        <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
-        <button class="filter-btn" data-filter="not_submitted">📋 Not Submitted</button>
-      </div>
-      <div class="card"><div id="verification-table"><div class="loading"><div class="spinner"></div>Loading...</div></div></div>
-    </div>
   </div>
 </div>
 
-<div class="modal-overlay" id="modal" style="display:none">
-  <div class="modal" id="modal-body"></div>
-</div>
+<div class="modal-overlay" id="modal" style="display:none"><div class="modal" id="modal-body"></div></div>
 <div id="toast" style="display:none"></div>
 
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script>
-  firebase.initializeApp({
-    apiKey: 'AIzaSyBSy_0zId72Lor1yRhqi_6hheOnSfPqwIM',
-    authDomain: 'connect-telangana.firebaseapp.com',
-    projectId: 'connect-telangana',
-    storageBucket: 'connect-telangana.firebasestorage.app',
-    messagingSenderId: '75437531188',
-    appId: '1:75437531188:web:8b499ea45672c5339e6a61',
-  });
-  const auth = firebase.auth();
-  const db = firebase.firestore();
+firebase.initializeApp({
+  apiKey:'AIzaSyBSy_0zId72Lor1yRhqi_6hheOnSfPqwIM',
+  authDomain:'connect-telangana.firebaseapp.com',
+  projectId:'connect-telangana',
+  storageBucket:'connect-telangana.firebasestorage.app',
+  messagingSenderId:'75437531188',
+  appId:'1:75437531188:web:8b499ea45672c5339e6a61'
+});
+var auth = firebase.auth();
+var db = firebase.firestore();
+// ── Data ──────────────────────────────────────────────────────────────────────
+var helpers=[], users=[], alerts=[], chats=[], reviews=[];
+var helperFilter='all', alertFilter='all', verificationFilter='all';
 
-  let helpers=[], users=[], alerts=[], chats=[], reviews=[];
-  let helperFilter='all', alertFilter='all', verificationFilter='all';
-
-// Auth
-  window.doLogin = function() {
-    var email = document.getElementById('admin-email').value.trim();
-    var pass = document.getElementById('admin-password').value;
-    var errEl = document.getElementById('login-error');
-    var btn = document.getElementById('login-btn');
-    if (!email || !pass) { errEl.textContent = '❌ Please enter email and password.'; return; }
-    errEl.textContent = '';
-    btn.textContent = 'Signing in...';
-    btn.disabled = true;
-    auth.signInWithEmailAndPassword(email, pass).then(function() {
-      btn.textContent = 'Sign In →';
-      btn.disabled = false;
-    }).catch(function(e) {
-      errEl.textContent = '❌ ' + (e.code==='auth/wrong-password'?'Wrong password.':e.code==='auth/user-not-found'?'User not found.':e.code==='auth/invalid-email'?'Invalid email.':e.message);
+// ── Login ─────────────────────────────────────────────────────────────────────
+document.getElementById('login-btn').addEventListener('click', function() {
+  var email = document.getElementById('admin-email').value.trim();
+  var pass = document.getElementById('admin-password').value;
+  var errEl = document.getElementById('login-error');
+  var btn = document.getElementById('login-btn');
+  errEl.textContent = '';
+  if (!email || !pass) { errEl.textContent = '❌ Please enter email and password.'; return; }
+  btn.textContent = 'Signing in...';
+  btn.disabled = true;
+  auth.signInWithEmailAndPassword(email, pass)
+    .then(function() { btn.textContent = 'Sign In →'; btn.disabled = false; })
+    .catch(function(e) {
+      errEl.textContent = '❌ ' + (
+        e.code==='auth/wrong-password' ? 'Wrong password.' :
+        e.code==='auth/user-not-found' ? 'User not found.' :
+        e.code==='auth/invalid-email' ? 'Invalid email.' :
+        e.code==='auth/invalid-credential' ? 'Invalid email or password.' :
+        e.message
+      );
       btn.textContent = 'Sign In →';
       btn.disabled = false;
     });
-  };
+});
 
-  document.getElementById('admin-password').addEventListener('keydown', function(e) {
-    if(e.key==='Enter') document.getElementById('login-btn').click();
+document.getElementById('admin-password').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('login-btn').click();
+});
+
+document.getElementById('signout-btn').addEventListener('click', function() { auth.signOut(); });
+
+auth.onAuthStateChanged(function(user) {
+  if (user) {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    document.getElementById('admin-info').textContent = user.email;
+    loadAll();
+  } else {
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+  }
+});
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(function(item) {
+  item.addEventListener('click', function() {
+    var page = this.getAttribute('data-page');
+    document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+    document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+    document.getElementById('page-' + page).classList.add('active');
+    this.classList.add('active');
   });
+});
 
-  document.getElementById('signout-btn').onclick = function() { auth.signOut(); };
+// ── Filters ───────────────────────────────────────────────────────────────────
+document.getElementById('helper-filters').addEventListener('click', function(e) {
+  if (!e.target.classList.contains('filter-btn')) return;
+  helperFilter = e.target.getAttribute('data-filter');
+  this.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  e.target.classList.add('active');
+  renderHelpers();
+});
 
-  auth.onAuthStateChanged(function(user) {
-    if(user) {
-      document.getElementById('login-screen').style.display = 'none';
-      document.getElementById('app').style.display = 'block';
-      document.getElementById('admin-info').textContent = user.email;
-      loadAll();
-    } else {
-      document.getElementById('login-screen').style.display = 'flex';
-      document.getElementById('app').style.display = 'none';
-    }
-  });
+document.getElementById('alert-filters').addEventListener('click', function(e) {
+  if (!e.target.classList.contains('filter-btn')) return;
+  alertFilter = e.target.getAttribute('data-filter');
+  this.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  e.target.classList.add('active');
+  renderAlerts();
+});
 
-  // Navigation
-  ['overview','helpers','users','alerts','chats','reviews','verification'].forEach(function(page) {
-    document.getElementById('nav-'+page).addEventListener('click', function() {
-      document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
-      document.querySelectorAll('.nav-item').forEach(function(n){n.classList.remove('active');});
-      document.getElementById('page-'+page).classList.add('active');
-      this.classList.add('active');
-    });
-  });
+document.getElementById('verification-filters').addEventListener('click', function(e) {
+  if (!e.target.classList.contains('filter-btn')) return;
+  verificationFilter = e.target.getAttribute('data-filter');
+  this.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  e.target.classList.add('active');
+  renderVerification();
+});
 
-  // Filters
-  document.getElementById('helper-filters').addEventListener('click', function(e) {
-    if(!e.target.classList.contains('filter-btn')) return;
-    helperFilter = e.target.dataset.filter;
-    document.querySelectorAll('#helper-filters .filter-btn').forEach(function(b){b.classList.remove('active');});
-    e.target.classList.add('active');
+document.getElementById('modal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// ── Load Data ─────────────────────────────────────────────────────────────────
+function loadAll() {
+  Promise.all([loadHelpers(), loadUsers(), loadAlerts(), loadChats(), loadReviews()])
+    .then(function() { updateStats(); renderOverview(); renderVerification(); });
+}
+
+function loadHelpers() {
+  return db.collection('helpers').get().then(function(snap) {
+    helpers = snap.docs.map(function(d) { return Object.assign({id:d.id}, d.data()); });
     renderHelpers();
   });
-
-  document.getElementById('verification-filters').addEventListener('click', function(e) {
-    if(!e.target.classList.contains('filter-btn')) return;
-    verificationFilter = e.target.dataset.filter;
-    document.querySelectorAll('#verification-filters .filter-btn').forEach(function(b){b.classList.remove('active');});
-    e.target.classList.add('active');
-    renderVerification();
-  });
-
-  document.getElementById('alert-filters').addEventListener('click', function(e) {
-    if(!e.target.classList.contains('filter-btn')) return;
-    alertFilter = e.target.dataset.filter;
-    document.querySelectorAll('#alert-filters .filter-btn').forEach(function(b){b.classList.remove('active');});
-    e.target.classList.add('active');
-    renderAlerts();
-  });
-
-  // Modal close
-  document.getElementById('modal').addEventListener('click', function(e) {
-    if(e.target === this) closeModal();
-  });
-
-  // Load
-  async function loadAll() {
-    await Promise.all([loadHelpers(),loadUsers(),loadAlerts(),loadChats(),loadReviews()]);
-    renderVerification();
-    updateStats(); renderOverview();
-  }
-
-  async function loadHelpers() {
-    const snap = await db.collection('helpers').get();
-    helpers = snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
-    renderHelpers();
-  }
-  async function loadUsers() {
-    const snap = await db.collection('users').get();
-    users = snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+}
+function loadUsers() {
+  return db.collection('users').get().then(function(snap) {
+    users = snap.docs.map(function(d) { return Object.assign({id:d.id}, d.data()); });
     renderUsers();
-  }
-  async function loadAlerts() {
-    const snap = await db.collection('emergencyAlerts').get();
-    alerts = snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+  });
+}
+function loadAlerts() {
+  return db.collection('emergencyAlerts').get().then(function(snap) {
+    alerts = snap.docs.map(function(d) { return Object.assign({id:d.id}, d.data()); });
     renderAlerts();
-  }
-  async function loadChats() {
-    const snap = await db.collection('chats').get();
-    chats = snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+  });
+}
+function loadChats() {
+  return db.collection('chats').get().then(function(snap) {
+    chats = snap.docs.map(function(d) { return Object.assign({id:d.id}, d.data()); });
     renderChats();
-  }
-  async function loadReviews() {
-    const snap = await db.collection('reviews').get();
-    reviews = snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+  });
+}
+function loadReviews() {
+  return db.collection('reviews').get().then(function(snap) {
+    reviews = snap.docs.map(function(d) { return Object.assign({id:d.id}, d.data()); });
     renderReviews();
-  }
+  });
+}
 
-  function updateStats() {
-    const ph = helpers.filter(function(h){return (h.status||'pending')==='pending';}).length;
-    const pa = alerts.filter(function(a){return (a.status||'pending')==='pending';}).length;
-    document.getElementById('s-users').textContent = users.length;
-    document.getElementById('s-helpers').textContent = helpers.length;
-    document.getElementById('s-pending').textContent = ph+pa;
-    document.getElementById('s-alerts').textContent = alerts.length;
-    var bh=document.getElementById('badge-helpers'); bh.textContent=ph; bh.style.display=ph>0?'inline':'none';
-    var ba=document.getElementById('badge-alerts'); ba.textContent=pa; ba.style.display=pa>0?'inline':'none';
-    document.getElementById('pending-h-count').textContent=ph;
-    document.getElementById('pending-a-count').textContent=pa;
-  }
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updateStats() {
+  var ph = helpers.filter(function(h) { return (h.status||'pending')==='pending'; }).length;
+  var pa = alerts.filter(function(a) { return (a.status||'pending')==='pending'; }).length;
+  var pv = helpers.filter(function(h) { return h.verificationStatus==='pending'; }).length;
+  document.getElementById('s-users').textContent = users.length;
+  document.getElementById('s-helpers').textContent = helpers.length;
+  document.getElementById('s-pending').textContent = ph + pa + pv;
+  document.getElementById('s-alerts').textContent = alerts.length;
+  setBadge('badge-helpers', ph);
+  setBadge('badge-alerts', pa);
+  setBadge('badge-verification', pv);
+  document.getElementById('pending-h-count').textContent = ph;
+  document.getElementById('pending-a-count').textContent = pa;
+}
 
-  function renderOverview() {
-    var ph=helpers.filter(function(h){return (h.status||'pending')==='pending';});
-    var pa=alerts.filter(function(a){return (a.status||'pending')==='pending';});
-    document.getElementById('overview-helpers').innerHTML = ph.length===0 ? emptyState('✅','All caught up!','No pending applications.') : helperTableHTML(ph.slice(0,5));
-    document.getElementById('overview-alerts').innerHTML = pa.length===0 ? emptyState('✅','No pending alerts','All alerts reviewed.') : alertTableHTML(pa.slice(0,5));
-  }
+function setBadge(id, count) {
+  var el = document.getElementById(id);
+  el.textContent = count;
+  el.style.display = count > 0 ? 'inline' : 'none';
+}
 
-  function renderHelpers() {
-    var f = helperFilter==='all' ? helpers : helpers.filter(function(h){return (h.status||'pending')===helperFilter;});
-    document.getElementById('helpers-table').innerHTML = f.length===0 ? emptyState('🙋','No helpers','No helpers match this filter.') : helperTableHTML(f);
-  }
+// ── Overview ──────────────────────────────────────────────────────────────────
+function renderOverview() {
+  var ph = helpers.filter(function(h) { return (h.status||'pending')==='pending'; });
+  var pa = alerts.filter(function(a) { return (a.status||'pending')==='pending'; });
+  document.getElementById('overview-helpers').innerHTML = ph.length===0 ? empty('✅','All caught up!','No pending applications.') : helperTableHTML(ph.slice(0,5));
+  document.getElementById('overview-alerts').innerHTML = pa.length===0 ? empty('✅','No pending alerts','All reviewed.') : alertTableHTML(pa.slice(0,5));
+}
 
-  function helperTableHTML(list) {
-    return '<table class="table"><thead><tr><th>Helper</th><th>Location</th><th>Skills</th><th>Pricing</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+
-      list.map(function(h) {
-        return '<tr><td><div class="user-cell"><div class="avatar">'+((h.name||'?')[0].toUpperCase())+'</div><div><div class="user-name">'+(h.name||'Unknown')+'</div><div class="user-phone">'+(h.phone||'')+'</div></div></div></td>'+
-          '<td>'+(h.village||'')+', '+(h.district||'')+'</td>'+
-          '<td>'+((h.skills||[]).slice(0,2).join(', '))+((h.skills||[]).length>2?' +'+(h.skills.length-2):'')+'</td>'+
-          '<td>'+(h.pricingType==='paid'?'₹'+h.hourlyRate+'/hr':'Free')+'</td>'+
-          '<td><span class="badge badge-'+(h.status||'pending')+'">'+sIcon(h.status)+' '+(h.status||'pending')+'</span></td>'+
-          '<td><div class="btn-actions">'+
-            '<button class="btn btn-view" onclick="viewHelper(\''+h.id+'\')">👁 View</button>'+
-            ((h.status||'pending')==='pending'?
-              '<button class="btn btn-approve" onclick="approveHelper(\''+h.id+'\')">✅ Approve</button>'+
-              '<button class="btn btn-reject" onclick="rejectHelper(\''+h.id+'\')">❌ Reject</button>':'')+
-          '</div></td></tr>';
-      }).join('')+'</tbody></table>';
-  }
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function renderHelpers() {
+  var f = helperFilter==='all' ? helpers : helpers.filter(function(h) { return (h.status||'pending')===helperFilter; });
+  document.getElementById('helpers-table').innerHTML = f.length===0 ? empty('🙋','No helpers','No helpers match this filter.') : helperTableHTML(f);
+}
 
-  function viewHelper(id) {
-    var h=helpers.find(function(x){return x.id===id;});
-    if(!h) return;
-    showModal('<div class="modal-title">🙋 '+( h.name||'Helper')+'</div>'+
-      mf('Name',h.name||'—')+mf('Phone',h.phone||'—')+mf('Age',h.age||'—')+
-      mf('Location',(h.village||'')+', '+(h.district||''))+
-      mf('Skills',(h.skills||[]).join(', ')||'—')+
-      mf('Pricing',h.pricingType==='paid'?'₹'+h.hourlyRate+'/hr':'Free')+
-      mf('Bio',h.bio||'—')+
-      mf('Status','<span class="badge badge-'+(h.status||'pending')+'">'+sIcon(h.status)+' '+(h.status||'pending')+'</span>')+
-      mf('Registered',fDate(h.createdAt))+
-      '<div class="modal-footer">'+
-        ((h.status||'pending')==='pending'?
-          '<button class="btn btn-reject" onclick="rejectHelper(\''+h.id+'\');closeModal()">❌ Reject</button>'+
-          '<button class="btn btn-approve" onclick="approveHelper(\''+h.id+'\');closeModal()">✅ Approve</button>':
-          '<button class="btn btn-view" onclick="closeModal()">Close</button>')+
-      '</div>');
-  }
+function helperTableHTML(list) {
+  return '<table class="table"><thead><tr><th>Helper</th><th>Location</th><th>Skills</th><th>Pricing</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
+    list.map(function(h) {
+      return '<tr><td><div class="user-cell"><div class="avatar">' + (h.name||'?')[0].toUpperCase() + '</div><div><div class="user-name">' + (h.name||'Unknown') + '</div><div class="user-phone">' + (h.phone||'') + '</div></div></div></td>' +
+        '<td>' + (h.village||'') + ', ' + (h.district||'') + '</td>' +
+        '<td>' + (h.skills||[]).slice(0,2).join(', ') + ((h.skills||[]).length>2 ? ' +' + ((h.skills||[]).length-2) : '') + '</td>' +
+        '<td>' + (h.pricingType==='paid' ? '₹' + h.hourlyRate + '/hr' : 'Free') + '</td>' +
+        '<td><span class="badge badge-' + (h.status||'pending') + '">' + sIcon(h.status) + ' ' + (h.status||'pending') + '</span></td>' +
+        '<td><div class="btn-actions">' +
+          '<button class="btn btn-view" onclick="viewHelper(\'' + h.id + '\')">👁 View</button>' +
+          ((h.status||'pending')==='pending' ?
+            '<button class="btn btn-approve" onclick="approveHelper(\'' + h.id + '\')">✅ Approve</button>' +
+            '<button class="btn btn-reject" onclick="rejectHelper(\'' + h.id + '\')">❌ Reject</button>' : '') +
+        '</div></td></tr>';
+    }).join('') + '</tbody></table>';
+}
 
-  async function approveHelper(id) {
-    try {
-      await db.collection('helpers').doc(id).update({status:'approved'});
-      var h=helpers.find(function(x){return x.id===id;}); if(h) h.status='approved';
-      showToast('✅ Helper approved!','success');
-      renderHelpers(); renderOverview(); updateStats();
-    } catch(e){showToast('Error: '+e.message,'error');}
-  }
+function viewHelper(id) {
+  var h = helpers.find(function(x) { return x.id===id; });
+  if (!h) return;
+  showModal('<div class="modal-title">🙋 ' + (h.name||'Helper') + '</div>' +
+    mf('Name', h.name||'—') + mf('Phone', h.phone||'—') + mf('Age', h.age||'—') +
+    mf('Location', (h.village||'') + ', ' + (h.district||'')) +
+    mf('Skills', (h.skills||[]).join(', ')||'—') +
+    mf('Pricing', h.pricingType==='paid' ? '₹' + h.hourlyRate + '/hr' : 'Free') +
+    mf('Bio', h.bio||'—') +
+    mf('Status', '<span class="badge badge-' + (h.status||'pending') + '">' + sIcon(h.status) + ' ' + (h.status||'pending') + '</span>') +
+    mf('Registered', fDate(h.createdAt)) +
+    '<div class="modal-footer">' +
+      ((h.status||'pending')==='pending' ?
+        '<button class="btn btn-reject" onclick="rejectHelper(\'' + h.id + '\');closeModal()">❌ Reject</button>' +
+        '<button class="btn btn-approve" onclick="approveHelper(\'' + h.id + '\');closeModal()">✅ Approve</button>' :
+        '<button class="btn btn-view" onclick="closeModal()">Close</button>') +
+    '</div>');
+}
 
-  async function rejectHelper(id) {
-    if(!confirm('Reject this helper application?')) return;
-    try {
-      await db.collection('helpers').doc(id).update({status:'rejected'});
-      var h=helpers.find(function(x){return x.id===id;}); if(h) h.status='rejected';
-      showToast('Helper rejected.','error');
-      renderHelpers(); renderOverview(); updateStats();
-    } catch(e){showToast('Error: '+e.message,'error');}
-  }
+function approveHelper(id) {
+  db.collection('helpers').doc(id).update({status:'approved'}).then(function() {
+    var h = helpers.find(function(x) { return x.id===id; }); if (h) h.status='approved';
+    showToast('✅ Helper approved!', 'success');
+    renderHelpers(); renderOverview(); updateStats();
+  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+}
 
-  function renderUsers() {
-    document.getElementById('users-table').innerHTML = users.length===0 ? emptyState('👥','No users yet','Users appear here after signup.') :
-      '<table class="table"><thead><tr><th>User</th><th>Location</th><th>Role</th><th>Joined</th></tr></thead><tbody>'+
-      users.map(function(u){
-        return '<tr><td><div class="user-cell"><div class="avatar">'+((u.name||u.phone||'?')[0].toUpperCase())+'</div>'+
-          '<div><div class="user-name">'+(u.name||'No name')+'</div><div class="user-phone">'+(u.phone||'—')+'</div></div></div></td>'+
-          '<td>'+(u.village?u.village+', ':'')+( u.district||'Not set')+'</td>'+
-          '<td><span class="badge badge-blue">'+(u.role||'user')+'</span></td>'+
-          '<td>'+fDate(u.createdAt)+'</td></tr>';
-      }).join('')+'</tbody></table>';
-  }
+function rejectHelper(id) {
+  if (!confirm('Reject this helper application?')) return;
+  db.collection('helpers').doc(id).update({status:'rejected'}).then(function() {
+    var h = helpers.find(function(x) { return x.id===id; }); if (h) h.status='rejected';
+    showToast('Helper rejected.', 'error');
+    renderHelpers(); renderOverview(); updateStats();
+  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+}
 
-  function renderAlerts() {
-    var f = alertFilter==='all' ? alerts : alerts.filter(function(a){return (a.status||'pending')===alertFilter;});
-    document.getElementById('alerts-table').innerHTML = f.length===0 ? emptyState('🚨','No alerts','No alerts match this filter.') : alertTableHTML(f);
-  }
+// ── Users ─────────────────────────────────────────────────────────────────────
+function renderUsers() {
+  document.getElementById('users-table').innerHTML = users.length===0 ? empty('👥','No users yet','Users appear here after signup.') :
+    '<table class="table"><thead><tr><th>User</th><th>Location</th><th>Role</th><th>Joined</th></tr></thead><tbody>' +
+    users.map(function(u) {
+      return '<tr><td><div class="user-cell"><div class="avatar">' + (u.name||u.phone||'?')[0].toUpperCase() + '</div>' +
+        '<div><div class="user-name">' + (u.name||'No name') + '</div><div class="user-phone">' + (u.phone||'—') + '</div></div></div></td>' +
+        '<td>' + (u.village ? u.village + ', ' : '') + (u.district||'Not set') + '</td>' +
+        '<td><span class="badge badge-blue">' + (u.role||'user') + '</span></td>' +
+        '<td>' + fDate(u.createdAt) + '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
 
-  function alertTableHTML(list) {
-    return '<table class="table"><thead><tr><th>Title</th><th>Type</th><th>Coverage</th><th>Urgency</th><th>Cost</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+
-      list.map(function(a){
-        return '<tr><td><div class="user-name">'+(a.title||'Untitled')+'</div><div class="user-phone">'+(a.userPhone||'')+'</div></td>'+
-          '<td><span class="badge badge-blue">'+(a.alertType||'—')+'</span></td>'+
-          '<td>'+coverCount(a)+'</td>'+
-          '<td><span class="badge badge-'+(a.urgency||'low').toLowerCase()+'">'+(a.urgency||'—')+'</span></td>'+
-          '<td>₹'+((a.totalCost||0).toLocaleString('en-IN'))+'</td>'+
-          '<td><span class="badge badge-'+(a.status||'pending')+'">'+sIcon(a.status)+' '+(a.status||'pending')+'</span></td>'+
-          '<td><div class="btn-actions">'+
-            '<button class="btn btn-view" onclick="viewAlert(\''+a.id+'\')">👁 View</button>'+
-            ((a.status||'pending')==='pending'?
-              '<button class="btn btn-approve" onclick="approveAlert(\''+a.id+'\')">✅ Approve</button>'+
-              '<button class="btn btn-reject" onclick="rejectAlert(\''+a.id+'\')">❌ Reject</button>':'')+
-          '</div></td></tr>';
-      }).join('')+'</tbody></table>';
-  }
+// ── Alerts ────────────────────────────────────────────────────────────────────
+function renderAlerts() {
+  var f = alertFilter==='all' ? alerts : alerts.filter(function(a) { return (a.status||'pending')===alertFilter; });
+  document.getElementById('alerts-table').innerHTML = f.length===0 ? empty('🚨','No alerts','No alerts match this filter.') : alertTableHTML(f);
+}
 
-  function viewAlert(id) {
-    var a=alerts.find(function(x){return x.id===id;}); if(!a) return;
-    showModal('<div class="modal-title">🚨 '+(a.title||'Alert')+'</div>'+
-      mf('Type',a.alertType||'—')+mf('Submitted By',a.userPhone||a.userId||'—')+
-      mf('Urgency','<span class="badge badge-'+(a.urgency||'low').toLowerCase()+'">'+(a.urgency||'—')+'</span>')+
-      mf('Coverage',coverCount(a)+': '+coverList(a))+
-      mf('Recipients',(a.recipients||[]).join(', ')||'—')+
-      mf('Details',a.details||'—')+
-      (a.approxLocation?mf('Location','📍 '+a.approxLocation):'')+
-      (a.lastSeen?mf('Last Seen',a.lastSeen):'')+
-      (a.reward?mf('Reward','₹'+Number(a.reward).toLocaleString('en-IN')):'')+
-      mf('Police Doc',a.policeDocURL?'<a href="'+a.policeDocURL+'" target="_blank" style="color:var(--blue)">📄 View Document</a>':'Not required')+
-      mf('Total Cost','<span style="font-size:20px;font-weight:800;color:var(--blue)">₹'+((a.totalCost||0).toLocaleString('en-IN'))+'</span>')+
-      (a.photos&&a.photos.length>0?'<div class="modal-field"><div class="modal-label">Photos</div><div class="modal-photos">'+a.photos.map(function(p){return '<img src="'+p+'" class="modal-photo"/>';}).join('')+'</div></div>':'')+
-      mf('Status','<span class="badge badge-'+(a.status||'pending')+'">'+sIcon(a.status)+' '+(a.status||'pending')+'</span>')+
-      '<div class="modal-footer">'+
-        ((a.status||'pending')==='pending'?
-          '<button class="btn btn-reject" onclick="rejectAlert(\''+a.id+'\');closeModal()">❌ Reject</button>'+
-          '<button class="btn btn-approve" onclick="approveAlert(\''+a.id+'\');closeModal()">✅ Approve & Enable Payment</button>':
-          '<button class="btn btn-view" onclick="closeModal()">Close</button>')+
-      '</div>');
-  }
+function alertTableHTML(list) {
+  return '<table class="table"><thead><tr><th>Title</th><th>Type</th><th>Coverage</th><th>Urgency</th><th>Cost</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
+    list.map(function(a) {
+      return '<tr><td><div class="user-name">' + (a.title||'Untitled') + '</div><div class="user-phone">' + (a.userPhone||'') + '</div></td>' +
+        '<td><span class="badge badge-blue">' + (a.alertType||'—') + '</span></td>' +
+        '<td>' + coverCount(a) + '</td>' +
+        '<td><span class="badge badge-' + (a.urgency||'low').toLowerCase() + '">' + (a.urgency||'—') + '</span></td>' +
+        '<td>₹' + ((a.totalCost||0).toLocaleString('en-IN')) + '</td>' +
+        '<td><span class="badge badge-' + (a.status||'pending') + '">' + sIcon(a.status) + ' ' + (a.status||'pending') + '</span></td>' +
+        '<td><div class="btn-actions">' +
+          '<button class="btn btn-view" onclick="viewAlert(\'' + a.id + '\')">👁 View</button>' +
+          ((a.status||'pending')==='pending' ?
+            '<button class="btn btn-approve" onclick="approveAlert(\'' + a.id + '\')">✅ Approve</button>' +
+            '<button class="btn btn-reject" onclick="rejectAlert(\'' + a.id + '\')">❌ Reject</button>' : '') +
+        '</div></td></tr>';
+    }).join('') + '</tbody></table>';
+}
 
-  async function approveAlert(id) {
-    try {
-      await db.collection('emergencyAlerts').doc(id).update({status:'approved'});
-      var a=alerts.find(function(x){return x.id===id;}); if(a) a.status='approved';
-      showToast('✅ Alert approved!','success');
-      renderAlerts(); renderOverview(); updateStats();
-    } catch(e){showToast('Error: '+e.message,'error');}
-  }
+function viewAlert(id) {
+  var a = alerts.find(function(x) { return x.id===id; }); if (!a) return;
+  showModal('<div class="modal-title">🚨 ' + (a.title||'Alert') + '</div>' +
+    mf('Type', a.alertType||'—') + mf('Submitted By', a.userPhone||a.userId||'—') +
+    mf('Urgency', '<span class="badge badge-' + (a.urgency||'low').toLowerCase() + '">' + (a.urgency||'—') + '</span>') +
+    mf('Coverage', coverCount(a) + ': ' + coverList(a)) +
+    mf('Recipients', (a.recipients||[]).join(', ')||'—') +
+    mf('Details', a.details||'—') +
+    (a.approxLocation ? mf('Location', '📍 ' + a.approxLocation) : '') +
+    (a.reward ? mf('Reward', '₹' + Number(a.reward).toLocaleString('en-IN')) : '') +
+    mf('Police Doc', a.policeDocURL ? '<a href="' + a.policeDocURL + '" target="_blank" style="color:var(--blue)">📄 View</a>' : 'Not required') +
+    mf('Total Cost', '<span style="font-size:20px;font-weight:800;color:var(--blue)">₹' + ((a.totalCost||0).toLocaleString('en-IN')) + '</span>') +
+    (a.photos&&a.photos.length>0 ? '<div class="modal-field"><div class="modal-label">Photos</div><div class="modal-photos">' + a.photos.map(function(p) { return '<img src="' + p + '" class="modal-photo"/>'; }).join('') + '</div></div>' : '') +
+    '<div class="modal-footer">' +
+      ((a.status||'pending')==='pending' ?
+        '<button class="btn btn-reject" onclick="rejectAlert(\'' + a.id + '\');closeModal()">❌ Reject</button>' +
+        '<button class="btn btn-approve" onclick="approveAlert(\'' + a.id + '\');closeModal()">✅ Approve & Enable Payment</button>' :
+        '<button class="btn btn-view" onclick="closeModal()">Close</button>') +
+    '</div>');
+}
 
-  async function rejectAlert(id) {
-    if(!confirm('Reject this emergency alert?')) return;
-    try {
-      await db.collection('emergencyAlerts').doc(id).update({status:'rejected'});
-      var a=alerts.find(function(x){return x.id===id;}); if(a) a.status='rejected';
-      showToast('Alert rejected.','error');
-      renderAlerts(); renderOverview(); updateStats();
-    } catch(e){showToast('Error: '+e.message,'error');}
-  }
+function approveAlert(id) {
+  db.collection('emergencyAlerts').doc(id).update({status:'approved'}).then(function() {
+    var a = alerts.find(function(x) { return x.id===id; }); if (a) a.status='approved';
+    showToast('✅ Alert approved!', 'success');
+    renderAlerts(); renderOverview(); updateStats();
+  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+}
 
-  function renderChats() {
-    document.getElementById('chats-table').innerHTML = chats.length===0 ? emptyState('💬','No chats yet','Conversations appear here.') :
-      '<table class="table"><thead><tr><th>Chat ID</th><th>Helper</th><th>Last Message</th><th>Date</th></tr></thead><tbody>'+
-      chats.map(function(c){
-        return '<tr><td><code style="font-size:11px;color:var(--text-sec)">'+c.id.slice(0,20)+'...</code></td>'+
-          '<td>'+(c.helperName||c.helperId||'—')+'</td><td>'+(c.lastMessage||'No messages')+'</td><td>'+fDate(c.lastMessageAt)+'</td></tr>';
-      }).join('')+'</tbody></table>';
-  }
+function rejectAlert(id) {
+  if (!confirm('Reject this alert?')) return;
+  db.collection('emergencyAlerts').doc(id).update({status:'rejected'}).then(function() {
+    var a = alerts.find(function(x) { return x.id===id; }); if (a) a.status='rejected';
+    showToast('Alert rejected.', 'error');
+    renderAlerts(); renderOverview(); updateStats();
+  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+}
 
-  function renderReviews() {
-    document.getElementById('reviews-table').innerHTML = reviews.length===0 ? emptyState('⭐','No reviews yet','Reviews appear here.') :
-      '<table class="table"><thead><tr><th>Reviewer</th><th>Helper</th><th>Rating</th><th>Comment</th><th>Date</th></tr></thead><tbody>'+
-      reviews.map(function(r){
-        return '<tr><td>'+(r.userName||r.userId||'—')+'</td>'+
-          '<td><code style="font-size:11px">'+((r.helperId||'—').slice(0,14))+'</code></td>'+
-          '<td style="color:#F1C40F">'+'★'.repeat(r.rating||0)+'☆'.repeat(5-(r.rating||0))+'</td>'+
-          '<td>'+(r.comment||'—')+'</td><td>'+fDate(r.createdAt)+'</td></tr>';
-      }).join('')+'</tbody></table>';
-  }
+// ── Verification ──────────────────────────────────────────────────────────────
+function renderVerification() {
+  var pv = helpers.filter(function(h) { return h.verificationStatus==='pending'; }).length;
+  setBadge('badge-verification', pv);
+  var f = verificationFilter==='all' ? helpers : helpers.filter(function(h) {
+    return (h.verificationStatus||'not_submitted')===verificationFilter;
+  });
+  document.getElementById('verification-table').innerHTML = f.length===0 ? empty('🛡️','No helpers','No helpers match this filter.') :
+    '<table class="table"><thead><tr><th>Helper</th><th>Location</th><th>Documents</th><th>Verification</th><th>Actions</th></tr></thead><tbody>' +
+    f.map(function(h) {
+      var vs = h.verificationStatus||'not_submitted';
+      var docs = h.documents||{};
+      var docCount = [docs.selfie,docs.aadhar,docs.addressProof].filter(Boolean).length;
+      return '<tr><td><div class="user-cell"><div class="avatar">' + (h.name||'?')[0].toUpperCase() + '</div>' +
+        '<div><div class="user-name">' + (h.name||'Unknown') + '</div><div class="user-phone">' + (h.phone||'') + '</div></div></div></td>' +
+        '<td>' + (h.village||'') + ', ' + (h.district||'') + '</td>' +
+        '<td>' + (docCount>0 ? '<span class="badge badge-blue">' + docCount + ' docs</span>' : '<span style="color:var(--text-muted)">None</span>') + '</td>' +
+        '<td><span class="badge badge-' + (vs==='verified'?'approved':vs==='pending'?'pending':vs==='rejected'?'rejected':'blue') + '">' +
+          (vs==='verified'?'✅ Verified':vs==='pending'?'⏳ Pending':vs==='rejected'?'❌ Rejected':'📋 Not Submitted') + '</span></td>' +
+        '<td><div class="btn-actions">' +
+          '<button class="btn btn-view" onclick="viewVerification(\'' + h.id + '\')" ' + (docCount===0?'disabled style="opacity:0.5"':'') + '>👁 View Docs</button>' +
+          (vs==='pending' ?
+            '<button class="btn btn-approve" onclick="verifyHelper(\'' + h.id + '\')">✅ Verify</button>' +
+            '<button class="btn btn-reject" onclick="rejectVerification(\'' + h.id + '\')">❌ Reject</button>' : '') +
+        '</div></td></tr>';
+    }).join('') + '</tbody></table>';
+}
 
-  function showModal(html) { document.getElementById('modal-body').innerHTML=html; document.getElementById('modal').style.display='flex'; }
-  function closeModal() { document.getElementById('modal').style.display='none'; }
-  function showToast(msg,type) { var t=document.getElementById('toast'); t.textContent=msg; t.className='toast toast-'+(type||'info'); t.style.display='block'; setTimeout(function(){t.style.display='none';},3500); }
-  function sIcon(s) { return s==='approved'?'✅':s==='rejected'?'❌':'⏳'; }
-  function fDate(ts) { if(!ts) return '—'; try { var d=ts.toDate?ts.toDate():new Date(ts); return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}); } catch(e){return '—';} }
-  function coverCount(a) { if(a.coverageType==='Villages') return (a.selectedVillages||[]).length+' villages'; if(a.coverageType==='Districts') return (a.selectedDistricts||[]).length+' districts'; if(a.coverageType==='States') return (a.selectedStates||[]).length+' states'; return '—'; }
-  function coverList(a) { if(a.coverageType==='Villages') return (a.selectedVillages||[]).join(', ')||'—'; if(a.coverageType==='Districts') return (a.selectedDistricts||[]).join(', ')||'—'; if(a.coverageType==='States') return (a.selectedStates||[]).join(', ')||'—'; return '—'; }
-  function mf(label,value) { return '<div class="modal-field"><div class="modal-label">'+label+'</div><div class="modal-value">'+value+'</div></div>'; }
-  // Verification functions
-  function renderVerification() {
-    var filtered = helpers.filter(function(h) {
-      var vs = h.verificationStatus || 'not_submitted';
-      return verificationFilter === 'all' ? true : vs === verificationFilter;
-    });
-    var el = document.getElementById('verification-table');
-    // Update badge
-    var pending = helpers.filter(function(h){ return h.verificationStatus === 'pending'; }).length;
-    var bv = document.getElementById('badge-verification');
-    bv.textContent = pending; bv.style.display = pending > 0 ? 'inline' : 'none';
+function viewVerification(id) {
+  var h = helpers.find(function(x) { return x.id===id; }); if (!h) return;
+  var vs = h.verificationStatus||'not_submitted';
+  var docs = h.documents||{};
+  showModal('<div class="modal-title">🛡️ Verification — ' + (h.name||'Helper') + '</div>' +
+    mf('Helper', h.name||'—') + mf('Phone', h.phone||'—') +
+    mf('Location', (h.village||'') + ', ' + (h.district||'')) +
+    mf('Status', '<span class="badge badge-' + (vs==='verified'?'approved':vs==='pending'?'pending':vs==='rejected'?'rejected':'blue') + '">' +
+      (vs==='verified'?'✅ Verified':vs==='pending'?'⏳ Pending':vs==='rejected'?'❌ Rejected':'📋 Not Submitted') + '</span>') +
+    (h.verificationRejectionReason ? mf('Rejection Reason', '<span style="color:var(--red)">' + h.verificationRejectionReason + '</span>') : '') +
+    '<div class="modal-field"><div class="modal-label">Documents</div><div class="modal-photos" style="margin-top:8px">' +
+      (docs.selfie ? '<div style="text-align:center"><a href="' + docs.selfie + '" target="_blank"><img src="' + docs.selfie + '" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Selfie</div></div>' : '') +
+      (docs.aadhar ? '<div style="text-align:center"><a href="' + docs.aadhar + '" target="_blank"><img src="' + docs.aadhar + '" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Aadhaar</div></div>' : '') +
+      (docs.addressProof ? '<div style="text-align:center"><a href="' + docs.addressProof + '" target="_blank"><img src="' + docs.addressProof + '" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Address Proof</div></div>' : '') +
+      (!docs.selfie && !docs.aadhar && !docs.addressProof ? '<span style="color:var(--text-muted)">No documents uploaded</span>' : '') +
+    '</div></div>' +
+    '<div class="modal-footer">' +
+      (vs==='pending' ?
+        '<button class="btn btn-reject" onclick="rejectVerification(\'' + h.id + '\');closeModal()">❌ Reject</button>' +
+        '<button class="btn btn-approve" onclick="verifyHelper(\'' + h.id + '\');closeModal()">✅ Verify Helper</button>' :
+        '<button class="btn btn-view" onclick="closeModal()">Close</button>') +
+    '</div>');
+}
 
-    if(filtered.length === 0) { el.innerHTML = emptyState('🛡️','No helpers found','No helpers match this filter.'); return; }
-    el.innerHTML = '<table class="table"><thead><tr><th>Helper</th><th>Location</th><th>Documents</th><th>Verification Status</th><th>Actions</th></tr></thead><tbody>'+
-      filtered.map(function(h) {
-        var vs = h.verificationStatus || 'not_submitted';
-        var hasDocs = (h.documents && (h.documents.selfie || h.documents.aadhar || h.documents.addressProof));
-        var docCount = h.documents ? [h.documents.selfie, h.documents.aadhar, h.documents.addressProof].filter(Boolean).length : 0;
-        return '<tr><td><div class="user-cell"><div class="avatar">'+(h.name||'?')[0].toUpperCase()+'</div>'+
-          '<div><div class="user-name">'+(h.name||'Unknown')+'</div><div class="user-phone">'+(h.phone||'')+'</div></div></div></td>'+
-          '<td>'+(h.village||'')+', '+(h.district||'')+'</td>'+
-          '<td>'+(hasDocs ? '<span class="badge badge-blue">'+docCount+' docs uploaded</span>' : '<span style="color:var(--text-muted)">None</span>')+'</td>'+
-          '<td><span class="badge badge-'+(vs==='verified'?'approved':vs==='pending'?'pending':vs==='rejected'?'rejected':'blue')+'">'+
-            (vs==='verified'?'✅ Verified':vs==='pending'?'⏳ Pending':vs==='rejected'?'❌ Rejected':'📋 Not Submitted')+'</span></td>'+
-          '<td><div class="btn-actions">'+
-            '<button class="btn btn-view" onclick="viewVerification(''+h.id+'')" '+(hasDocs?'':'disabled style="opacity:0.5"')+'>👁 View Docs</button>'+
-            (vs === 'pending' ? 
-              '<button class="btn btn-approve" onclick="verifyHelper(''+h.id+'')" >✅ Verify</button>'+
-              '<button class="btn btn-reject" onclick="rejectVerification(''+h.id+'')" >❌ Reject</button>' : '')+
-          '</div></td></tr>';
-      }).join('')+'</tbody></table>';
-  }
+function verifyHelper(id) {
+  db.collection('helpers').doc(id).update({
+    verificationStatus:'verified', isVerified:true,
+    verifiedAt:firebase.firestore.FieldValue.serverTimestamp(),
+    verificationRejectionReason:null
+  }).then(function() {
+    var h = helpers.find(function(x) { return x.id===id; });
+    if (h) { h.verificationStatus='verified'; h.isVerified=true; }
+    sendNotification(id, 'helper_verified', '🛡️ Profile Verified!', 'Your profile has been verified. A verified badge is now shown on your profile.', {});
+    showToast('✅ Helper verified! Badge added to profile.', 'success');
+    renderVerification(); updateStats();
+  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+}
 
-  function viewVerification(id) {
-    var h = helpers.find(function(x){return x.id===id;});
-    if(!h) return;
-    var vs = h.verificationStatus || 'not_submitted';
-    var docs = h.documents || {};
-    showModal('<div class="modal-title">🛡️ Verification — '+( h.name||'Helper')+'</div>'+
-      mf('Helper', h.name||'—') + mf('Phone', h.phone||'—') +
-      mf('Location', (h.village||'')+', '+(h.district||'')) +
-      mf('Status', '<span class="badge badge-'+(vs==='verified'?'approved':vs==='pending'?'pending':vs==='rejected'?'rejected':'blue')+'">'+
-        (vs==='verified'?'✅ Verified':vs==='pending'?'⏳ Pending Review':vs==='rejected'?'❌ Rejected':'📋 Not Submitted')+'</span>') +
-      (h.verificationRejectionReason ? mf('Rejection Reason', '<span style="color:var(--red)">'+h.verificationRejectionReason+'</span>') : '') +
-      '<div class="modal-field"><div class="modal-label">Submitted Documents</div>'+
-      '<div class="modal-photos" style="margin-top:8px">'+
-        (docs.selfie ? '<div style="text-align:center"><a href="'+docs.selfie+'" target="_blank"><img src="'+docs.selfie+'" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Selfie</div></div>' : '') +
-        (docs.aadhar ? '<div style="text-align:center"><a href="'+docs.aadhar+'" target="_blank"><img src="'+docs.aadhar+'" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Aadhaar</div></div>' : '') +
-        (docs.addressProof ? '<div style="text-align:center"><a href="'+docs.addressProof+'" target="_blank"><img src="'+docs.addressProof+'" class="modal-photo"/></a><div style="font-size:11px;color:#64748B;margin-top:4px">Address Proof</div></div>' : '') +
-        (!docs.selfie && !docs.aadhar && !docs.addressProof ? '<span style="color:var(--text-muted)">No documents uploaded yet</span>' : '') +
-      '</div></div>'+
-      '<div class="modal-footer">'+
-        (vs === 'pending' ?
-          '<button class="btn btn-reject" onclick="rejectVerification(''+h.id+'');closeModal()">❌ Reject</button>'+
-          '<button class="btn btn-approve" onclick="verifyHelper(''+h.id+'');closeModal()">✅ Verify Helper</button>' :
-          '<button class="btn btn-view" onclick="closeModal()">Close</button>')+
-      '</div>');
-  }
+function rejectVerification(id) {
+  var reason = prompt('Rejection reason (optional):') || 'Documents not clear or invalid.';
+  db.collection('helpers').doc(id).update({
+    verificationStatus:'rejected', isVerified:false,
+    verificationRejectionReason:reason
+  }).then(function() {
+    var h = helpers.find(function(x) { return x.id===id; });
+    if (h) { h.verificationStatus='rejected'; h.isVerified=false; h.verificationRejectionReason=reason; }
+    sendNotification(id, 'helper_rejected', '❌ Verification Not Approved', 'Reason: ' + reason, {});
+    showToast('Verification rejected.', 'error');
+    renderVerification(); updateStats();
+  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+}
 
-  async function verifyHelper(id) {
-    try {
-      await db.collection('helpers').doc(id).update({
-        verificationStatus: 'verified',
-        isVerified: true,
-        verifiedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        verificationRejectionReason: null,
-      });
-      var h = helpers.find(function(x){return x.id===id;}); 
-      if(h) { h.verificationStatus='verified'; h.isVerified=true; }
-      showToast('✅ Helper verified! Badge added to profile.','success');
-      renderVerification();
-    } catch(e){ showToast('Error: '+e.message,'error'); }
-  }
+// ── Chats ─────────────────────────────────────────────────────────────────────
+function renderChats() {
+  document.getElementById('chats-table').innerHTML = chats.length===0 ? empty('💬','No chats yet','Conversations appear here.') :
+    '<table class="table"><thead><tr><th>Chat ID</th><th>Helper</th><th>Last Message</th><th>Date</th></tr></thead><tbody>' +
+    chats.map(function(c) {
+      return '<tr><td><code style="font-size:11px;color:var(--text-sec)">' + c.id.slice(0,20) + '...</code></td>' +
+        '<td>' + (c.helperName||c.helperId||'—') + '</td>' +
+        '<td>' + (c.lastMessage||'No messages') + '</td>' +
+        '<td>' + fDate(c.lastMessageAt) + '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
 
-  async function rejectVerification(id) {
-    var reason = prompt('Enter rejection reason (optional):') || 'Documents not clear or invalid.';
-    try {
-      await db.collection('helpers').doc(id).update({
-        verificationStatus: 'rejected',
-        isVerified: false,
-        verificationRejectionReason: reason,
-      });
-      var h = helpers.find(function(x){return x.id===id;}); 
-      if(h) { h.verificationStatus='rejected'; h.isVerified=false; h.verificationRejectionReason=reason; }
-      showToast('Verification rejected. Helper notified.','error');
-      renderVerification();
-    } catch(e){ showToast('Error: '+e.message,'error'); }
-  }
+// ── Reviews ───────────────────────────────────────────────────────────────────
+function renderReviews() {
+  document.getElementById('reviews-table').innerHTML = reviews.length===0 ? empty('⭐','No reviews yet','Reviews appear here.') :
+    '<table class="table"><thead><tr><th>Reviewer</th><th>Helper</th><th>Rating</th><th>Comment</th><th>Date</th></tr></thead><tbody>' +
+    reviews.map(function(r) {
+      return '<tr><td>' + (r.userName||r.userId||'—') + '</td>' +
+        '<td><code style="font-size:11px">' + (r.helperId||'—').slice(0,14) + '</code></td>' +
+        '<td style="color:#F1C40F">' + '★'.repeat(r.rating||0) + '☆'.repeat(5-(r.rating||0)) + '</td>' +
+        '<td>' + (r.comment||'—') + '</td>' +
+        '<td>' + fDate(r.createdAt) + '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
 
-  function emptyState(emoji,title,sub) { return '<div class="empty-state"><div class="empty-emoji">'+emoji+'</div><div class="empty-title">'+title+'</div><div class="empty-sub">'+sub+'</div></div>'; }
+// ── Modal ─────────────────────────────────────────────────────────────────────
+function showModal(html) { document.getElementById('modal-body').innerHTML=html; document.getElementById('modal').style.display='flex'; }
+function closeModal() { document.getElementById('modal').style.display='none'; }
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg, type) {
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast toast-' + (type||'info');
+  t.style.display = 'block';
+  setTimeout(function() { t.style.display='none'; }, 3500);
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function sIcon(s) { return s==='approved'?'✅':s==='rejected'?'❌':'⏳'; }
+function fDate(ts) {
+  if (!ts) return '—';
+  try { var d=ts.toDate?ts.toDate():new Date(ts); return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}); }
+  catch(e) { return '—'; }
+}
+function coverCount(a) {
+  if (a.coverageType==='Villages') return (a.selectedVillages||[]).length + ' villages';
+  if (a.coverageType==='Districts') return (a.selectedDistricts||[]).length + ' districts';
+  if (a.coverageType==='States') return (a.selectedStates||[]).length + ' states';
+  return '—';
+}
+function coverList(a) {
+  if (a.coverageType==='Villages') return (a.selectedVillages||[]).join(', ')||'—';
+  if (a.coverageType==='Districts') return (a.selectedDistricts||[]).join(', ')||'—';
+  if (a.coverageType==='States') return (a.selectedStates||[]).join(', ')||'—';
+  return '—';
+}
+function mf(label, value) { return '<div class="modal-field"><div class="modal-label">' + label + '</div><div class="modal-value">' + value + '</div></div>'; }
+function empty(emoji, title, sub) { return '<div class="empty-state"><div class="empty-emoji">' + emoji + '</div><div class="empty-title">' + title + '</div><div class="empty-sub">' + sub + '</div></div>'; }
 </script>
 </body>
 </html>
