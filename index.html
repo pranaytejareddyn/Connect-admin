@@ -504,21 +504,74 @@ function viewAlert(id) {
     '</div>');
 }
 
-function approveAlert(id) {
-  db.collection('emergencyAlerts').doc(id).update({status:'approved'}).then(function() {
-    var a = alerts.find(function(x) { return x.id===id; }); if (a) a.status='approved';
-    showToast('✅ Alert approved!', 'success');
+async function approveAlert(id) {
+  var a = alerts.find(function(x){return x.id===id;});
+  if(!a) return;
+  try {
+    await db.collection('emergencyAlerts').doc(id).update({
+      status:'approved',
+      approvedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    a.status = 'approved';
+
+    // Notify creator
+    if(a.userId) {
+      await sendNotification(a.userId, 'alert_status_update', '✅ Alert Approved & Active!',
+        'Your alert "' + (a.title||'Alert') + '" is now live. Notifying people in selected areas.',
+        {alertId: id, screen:'AlertHistory'});
+    }
+
+    // Broadcast to targeted users/helpers
+    var districts = a.targetDistricts || [];
+    var audience = a.audienceType || 'both';
+    var emoji = a.urgency==='critical'?'🔴':a.urgency==='high'?'🟠':a.urgency==='medium'?'🟡':'🔵';
+    var reward = (a.isRewardEnabled && a.rewardAmount>0) ? ' · Reward: ₹'+Number(a.rewardAmount).toLocaleString('en-IN') : '';
+    var count = 0;
+
+    for(var i=0;i<districts.length;i++) {
+      var d = districts[i];
+      if(audience==='public'||audience==='both') {
+        var us = await db.collection('users').where('district','==',d).get();
+        for(var u=0;u<us.docs.length;u++) {
+          if(us.docs[u].id!==a.userId) {
+            await sendNotification(us.docs[u].id,'emergency_alert',
+              emoji+' Emergency Alert in Your Area',
+              (a.title||'Alert')+reward+' — Tap to view',
+              {alertId:id,screen:'AlertDetail',urgency:a.urgency||'high'});
+            count++;
+          }
+        }
+      }
+      if(audience==='helpers'||audience==='both') {
+        var hs = await db.collection('helpers').where('district','==',d).where('status','==','approved').get();
+        for(var h=0;h<hs.docs.length;h++) {
+          await sendNotification(hs.docs[h].id,'emergency_alert',
+            emoji+' Emergency Alert in Your Area',
+            (a.title||'Alert')+reward+' — Tap to view',
+            {alertId:id,screen:'AlertDetail',urgency:a.urgency||'high'});
+          count++;
+        }
+      }
+    }
+    showToast('✅ Approved! Notified '+count+' people in '+districts.length+' districts.','success');
     renderAlerts(); renderOverview(); updateStats();
-  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+  } catch(e) { showToast('Error: '+e.message,'error'); }
 }
 
-function rejectAlert(id) {
+async function rejectAlert(id) {
   if (!confirm('Reject this alert?')) return;
-  db.collection('emergencyAlerts').doc(id).update({status:'rejected'}).then(function() {
-    var a = alerts.find(function(x) { return x.id===id; }); if (a) a.status='rejected';
-    showToast('Alert rejected.', 'error');
+  var a = alerts.find(function(x){return x.id===id;});
+  try {
+    await db.collection('emergencyAlerts').doc(id).update({status:'rejected'});
+    if(a) a.status='rejected';
+    if(a && a.userId) {
+      await sendNotification(a.userId,'alert_status_update','❌ Alert Rejected',
+        'Your alert "'+(a.title||'Alert')+'" was rejected by admin. Please review and resubmit.',
+        {alertId:id,screen:'AlertHistory'});
+    }
+    showToast('Alert rejected. Creator notified.','error');
     renderAlerts(); renderOverview(); updateStats();
-  }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+  } catch(e) { showToast('Error: '+e.message,'error'); }
 }
 
 // ── Verification ──────────────────────────────────────────────────────────────
