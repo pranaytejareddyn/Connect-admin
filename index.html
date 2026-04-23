@@ -92,6 +92,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .modal-title{font-size:20px;font-weight:800;margin-bottom:20px}
 .modal-field{margin-bottom:14px}
 .modal-label{font-size:11px;font-weight:700;color:var(--text-sec);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
+.modal-section-header{font-size:14px;font-weight:800;color:var(--blue);margin:20px 0 10px 0;padding:8px 12px;background:var(--blue-light);border-radius:8px;border-left:4px solid var(--blue)}
 .modal-value{font-size:14px;line-height:1.6}
 .modal-footer{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
 .modal-photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
@@ -485,23 +486,110 @@ function alertTableHTML(list) {
 
 function viewAlert(id) {
   var a = alerts.find(function(x) { return x.id===id; }); if (!a) return;
+
+  var description = a.description || a.details || '—';
+  var location = a.exactLocation || a.approxLocation || '—';
+  var districts = (a.targetDistricts||[]).join(', ') || '—';
+  var villages = (a.targetVillages||[]).join(', ') || '';
+  var audience = a.audienceType || 'both';
+  var contactName = a.contactName || a.userName || '—';
+  var contactPhone = a.contactPhone || a.userPhone || '—';
+  var reward = a.isRewardEnabled && a.rewardAmount > 0 ? '₹' + Number(a.rewardAmount).toLocaleString('en-IN') : 'None';
+  var verified = a.verificationStatus === 'verified' ? '✅ Verified (FIR uploaded)' : '⚠️ Unverified';
+  var photoUrls = a.photoUrls || a.photos || [];
+
+  // Dynamic form fields
+  var extraFields = '';
+
+  // Missing Person
+  if (a.missingPerson) {
+    var mp = a.missingPerson;
+    extraFields += '<div class="modal-section-header">👤 Missing Person Details</div>';
+    extraFields += mf('Name', mp.name || '—');
+    extraFields += mf('Gender / Age', (mp.gender || '—') + ' / ' + (mp.age || '—'));
+    if (mp.height) extraFields += mf('Height', mp.height);
+    if (mp.complexion) extraFields += mf('Complexion', mp.complexion);
+    if (mp.hair) extraFields += mf('Hair', mp.hair);
+    if (mp.clothing) extraFields += mf('Clothing', mp.clothing);
+    extraFields += mf('Last Seen', (mp.lastSeenDate || '—') + ' at ' + (mp.lastSeenTime || '—'));
+    extraFields += mf('Last Seen Location', mp.lastSeenLocation || '—');
+    if (mp.distinguishingMarks) extraFields += mf('Distinguishing Marks', mp.distinguishingMarks);
+    if (mp.medicalCondition) extraFields += mf('Medical Condition', mp.medicalCondition);
+    if (mp.additionalNotes) extraFields += mf('Additional Notes', mp.additionalNotes);
+  }
+
+  // Missing Vehicle
+  if (a.missingVehicle) {
+    var mv = a.missingVehicle;
+    extraFields += '<div class="modal-section-header">🚗 Missing Vehicle Details</div>';
+    extraFields += mf('Vehicle', (mv.brand || '') + ' ' + (mv.model || '') + ' ' + (mv.variant || ''));
+    extraFields += mf('Type / Year', (mv.type || '—') + ' / ' + (mv.year || '—'));
+    extraFields += mf('Color', mv.color || '—');
+    extraFields += mf('License Plate', '<b>' + (mv.plate || '—') + '</b>');
+    if (mv.vin) extraFields += mf('VIN / Chassis', mv.vin);
+    if (mv.damage) extraFields += mf('Distinguishing Damage', mv.damage);
+    extraFields += mf('Last Seen', (mv.lastSeenDate || '—') + ' at ' + (mv.lastSeenTime || '—'));
+    extraFields += mf('Last Seen Location', mv.lastSeenLocation || '—');
+  }
+
+  // Missing Item
+  if (a.missingItem) {
+    var mi = a.missingItem;
+    extraFields += '<div class="modal-section-header">📦 Missing Item Details</div>';
+    extraFields += mf('Type', mi.type || '—');
+    if (mi.brand) extraFields += mf('Brand', mi.brand);
+    if (mi.color) extraFields += mf('Color', mi.color);
+    if (mi.serial) extraFields += mf('Serial Number', mi.serial);
+    extraFields += mf('Description', mi.description || '—');
+    extraFields += mf('Lost', (mi.lastSeenDate || '—') + ' at ' + (mi.lastSeenTime || '—'));
+    extraFields += mf('Last Seen Location', mi.lastSeenLocation || '—');
+  }
+
   showModal('<div class="modal-title">🚨 ' + (a.title||'Alert') + '</div>' +
-    mf('Type', a.alertType||'—') + mf('Submitted By', a.userPhone||a.userId||'—') +
-    mf('Urgency', '<span class="badge badge-' + (a.urgency||'low').toLowerCase() + '">' + (a.urgency||'—') + '</span>') +
-    mf('Coverage', coverCount(a) + ': ' + coverList(a)) +
-    mf('Recipients', (a.recipients||[]).join(', ')||'—') +
-    mf('Details', a.details||'—') +
-    (a.approxLocation ? mf('Location', '📍 ' + a.approxLocation) : '') +
-    (a.reward ? mf('Reward', '₹' + Number(a.reward).toLocaleString('en-IN')) : '') +
-    mf('Police Doc', a.policeDocURL ? '<a href="' + a.policeDocURL + '" target="_blank" style="color:var(--blue)">📄 View</a>' : 'Not required') +
-    mf('Total Cost', '<span style="font-size:20px;font-weight:800;color:var(--blue)">₹' + ((a.totalCost||0).toLocaleString('en-IN')) + '</span>') +
-    (a.photos&&a.photos.length>0 ? '<div class="modal-field"><div class="modal-label">Photos</div><div class="modal-photos">' + a.photos.map(function(p) { return '<img src="' + p + '" class="modal-photo"/>'; }).join('') + '</div></div>' : '') +
+    mf('Type', (a.alertType||'—').replace('_',' ')) +
+    mf('Urgency', '<span class="badge badge-' + (a.urgency||'low') + '">' + (a.urgency||'—') + '</span>') +
+    mf('Submitted By', contactName + ' · ' + contactPhone) +
+    mf('Audience', audience) +
+    mf('Target Districts', districts) +
+    (villages ? mf('Villages', villages) : '') +
+    mf('Description', description) +
+    mf('Location', '📍 ' + location) +
+    extraFields +
+    '<div class="modal-section-header">📋 Verification & Reward</div>' +
+    mf('Reward', reward) +
+    mf('Verification', verified) +
+    (a.firNumber ? mf('FIR Number', a.firNumber) : '') +
+    (a.policeStation ? mf('Police Station', a.policeStation) : '') +
+    (a.firDate ? mf('FIR Date', a.firDate) : '') +
+    (a.firDocumentUrl ? mf('FIR Document', '<a href="' + a.firDocumentUrl + '" target="_blank" style="color:var(--blue);font-weight:700">📄 View FIR Copy</a>') : '') +
+    (photoUrls.length>0 ? '<div class="modal-field"><div class="modal-label">Photos (' + photoUrls.length + ')</div><div class="modal-photos">' + photoUrls.map(function(p) { return '<a href="' + p + '" target="_blank"><img src="' + p + '" class="modal-photo" style="max-width:100px;max-height:100px;border-radius:8px;margin:4px;border:1px solid #ddd"/></a>'; }).join('') + '</div></div>' : '') +
     '<div class="modal-footer">' +
       ((a.status||'pending')==='pending' ?
         '<button class="btn btn-reject" onclick="rejectAlert(\'' + a.id + '\');closeModal()">❌ Reject</button>' +
-        '<button class="btn btn-approve" onclick="approveAlert(\'' + a.id + '\');closeModal()">✅ Approve & Enable Payment</button>' :
+        '<button class="btn" style="background:var(--warning);color:white" onclick="requestMoreInfo(\'' + a.id + '\');closeModal()">❓ Request Info</button>' +
+        '<button class="btn btn-approve" onclick="approveAlert(\'' + a.id + '\');closeModal()">✅ Approve & Broadcast</button>' :
         '<button class="btn btn-view" onclick="closeModal()">Close</button>') +
     '</div>');
+}
+
+function requestMoreInfo(id) {
+  var reason = prompt('What additional information do you need from the user?');
+  if (!reason) return;
+  var a = alerts.find(function(x){return x.id===id;});
+  db.collection('emergencyAlerts').doc(id).update({
+    status: 'info_requested',
+    infoRequest: reason,
+    infoRequestedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(function() {
+    if(a) a.status = 'info_requested';
+    if(a && a.userId) {
+      sendNotification(a.userId, 'alert_status_update', '❓ Additional Info Requested',
+        'Admin needs more details on your alert "' + (a.title||'') + '". Reason: ' + reason,
+        {alertId: id, screen: 'AlertHistory'});
+    }
+    showToast('ℹ️ Info request sent to user', 'success');
+    renderAlerts(); renderOverview(); updateStats();
+  }).catch(function(e){ showToast('Error: '+e.message, 'error'); });
 }
 
 async function approveAlert(id) {
