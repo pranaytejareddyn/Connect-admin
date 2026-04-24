@@ -343,6 +343,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-item" data-page="alerts"><span class="nav-icon">🚨</span>Alerts Center <span class="nav-badge" id="badge-alerts" style="display:none">0</span></div>
     <div class="nav-item" data-page="reports"><span class="nav-icon">🐛</span>Reports <span class="nav-badge" id="badge-reports" style="display:none">0</span></div>
     <div class="nav-item" data-page="moderation"><span class="nav-icon">⚖️</span>Moderation</div>
+    <div class="nav-item" data-page="appeals"><span class="nav-icon">🙋</span>Appeals <span class="nav-badge" id="badge-appeals" style="display:none">0</span></div>
 
     <div class="nav-section">Insights</div>
     <div class="nav-item" data-page="regions"><span class="nav-icon">🗺️</span>Regions</div>
@@ -540,6 +541,23 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         </div>
       </div>
 
+      <!-- APPEALS -->
+      <div class="page" id="page-appeals">
+        <div class="page-head">
+          <div><div class="page-title">Account Appeals</div><div class="page-sub">Review appeal requests from suspended/blocked accounts</div></div>
+        </div>
+        <div class="card">
+          <div class="filter-bar" id="appeal-filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="submitted">📬 Submitted</button>
+            <button class="filter-btn" data-filter="under_review">👀 Under Review</button>
+            <button class="filter-btn" data-filter="approved">✅ Approved</button>
+            <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
+          </div>
+          <div class="table-wrap" id="appeals-table"></div>
+        </div>
+      </div>
+
       <!-- MODERATION -->
       <div class="page" id="page-moderation">
         <div class="page-head">
@@ -635,8 +653,8 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 
 // ── State ──
-let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[];
-let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all';
+let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[];
+let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all';
 let userSearchText='', helperSearchText='', userDistrict='', helperDistrict='';
 let selectedUsers=new Set(), selectedHelpers=new Set();
 let currentAdmin = { email: '', name: 'Admin' };
@@ -755,6 +773,13 @@ document.getElementById('report-filters').addEventListener('click', e => {
   e.target.classList.add('active');
   renderReports();
 });
+document.getElementById('appeal-filters').addEventListener('click', e => {
+  if (!e.target.classList.contains('filter-btn')) return;
+  appealFilter = e.target.getAttribute('data-filter');
+  document.querySelectorAll('#appeal-filters .filter-btn').forEach(b => b.classList.remove('active'));
+  e.target.classList.add('active');
+  renderAppeals();
+});
 
 // Search
 document.getElementById('user-search').addEventListener('input', e => { userSearchText = e.target.value.toLowerCase(); renderUsers(); });
@@ -790,7 +815,7 @@ document.getElementById('modal').addEventListener('click', e => {
 
 // ── Load All Data ──
 function loadAll() {
-  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats()])
+  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals()])
     .then(() => {
       updateOverview();
       renderUsers();
@@ -800,6 +825,7 @@ function loadAll() {
       renderReports();
       renderReviews();
       renderChats();
+      renderAppeals();
     });
 }
 
@@ -836,6 +862,13 @@ function loadChats() {
   return db.collection('chats').limit(100).get().then(snap => {
     chats = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }).catch(e => { chats = []; });
+}
+function loadAppeals() {
+  return db.collection('appeals').get().then(snap => {
+    appeals = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+    setBadge('badge-appeals', appeals.filter(a => a.status === 'submitted').length);
+  }).catch(e => { appeals = []; });
 }
 function loadAuditLogs() {
   db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).get().then(snap => {
@@ -1081,31 +1114,178 @@ function viewUser(id) {
 
 function userAction(id, action) {
   const u = users.find(x => x.id === id); if (!u) return;
+
+  // For warn/suspend/block, show reason modal
+  if (['warn', 'suspend', 'block'].includes(action)) {
+    showModerationModal('user', id, action, u.name || u.phone);
+    return;
+  }
+
+  // Direct actions (unblock, unsuspend) just confirm
   const confirmMsg = {
-    block: 'Block this user? They will no longer be able to use the app.',
     unblock: 'Unblock this user and restore access?',
-    suspend: 'Suspend this user temporarily?',
     unsuspend: 'Unsuspend this user?',
-    warn: 'Send a warning to this user?',
   }[action];
   if (!confirm(confirmMsg)) return;
 
   const updates = {};
-  if (action === 'block') { updates.isBlocked = true; updates.blockedAt = firebase.firestore.FieldValue.serverTimestamp(); }
-  else if (action === 'unblock') { updates.isBlocked = false; }
-  else if (action === 'suspend') { updates.isSuspended = true; updates.suspendedAt = firebase.firestore.FieldValue.serverTimestamp(); }
-  else if (action === 'unsuspend') { updates.isSuspended = false; }
-  else if (action === 'warn') { updates.warnings = firebase.firestore.FieldValue.increment(1); }
+  if (action === 'unblock') {
+    updates.isBlocked = false;
+    updates.blockReason = '';
+    updates.blockReasonCategory = '';
+  } else if (action === 'unsuspend') {
+    updates.isSuspended = false;
+    updates.suspensionReason = '';
+    updates.suspensionReasonCategory = '';
+  }
 
   db.collection('users').doc(id).update(updates).then(() => {
-    Object.assign(u, { isBlocked: !!updates.isBlocked, isSuspended: !!updates.isSuspended });
-    if (action === 'unblock') u.isBlocked = false;
-    if (action === 'unsuspend') u.isSuspended = false;
+    Object.assign(u, updates);
     logAudit(`${action} user`, `${u.name || u.phone} (${id.slice(0,8)})`);
-    sendUserNotif(id, action);
+    sendUserNotif(id, action, '');
     showToast(`✅ User ${action}ed`, 'success');
     closeModal();
     renderUsers();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// ── Moderation action modal (for user/helper warn/suspend/block) ──
+function showModerationModal(accountType, accountId, action, accountName) {
+  const categories = [
+    'Abuse', 'Fraud', 'Fake profile', 'Harassment', 'Payment issue',
+    'Spam', 'Policy violation', 'Safety concern', 'Repeated complaints', 'Legal request', 'Other'
+  ];
+
+  const actionConfig = {
+    warn: { color: 'warning', emoji: '⚠️', title: 'Issue Warning' },
+    suspend: { color: 'warning', emoji: '⏸️', title: 'Suspend Account' },
+    block: { color: 'danger', emoji: '🚫', title: 'Block Account' },
+  }[action];
+
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">${actionConfig.emoji} ${actionConfig.title}</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <div class="modal-label">Target Account</div>
+        <div class="modal-value"><strong>${accountName}</strong> <code>${accountId.slice(0,12)}</code></div>
+      </div>
+
+      <div class="modal-field">
+        <div class="modal-label">Reason Category *</div>
+        <select id="mod-category" class="form-select" required>
+          <option value="">Select category...</option>
+          ${categories.map(c => `<option value="${c}">${c}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="modal-field">
+        <div class="modal-label">Detailed Explanation * (visible to account holder)</div>
+        <textarea id="mod-reason" class="form-textarea" placeholder="Explain why this action is being taken..." maxlength="500"></textarea>
+      </div>
+
+      ${action === 'suspend' ? `
+      <div class="modal-field">
+        <div class="modal-label">Duration (days)</div>
+        <select id="mod-duration" class="form-select">
+          <option value="1">1 day</option>
+          <option value="3">3 days</option>
+          <option value="7" selected>7 days</option>
+          <option value="14">14 days</option>
+          <option value="30">30 days</option>
+          <option value="90">90 days</option>
+        </select>
+      </div>` : ''}
+
+      <div class="modal-field">
+        <div class="modal-label">Internal Notes (admin only)</div>
+        <textarea id="mod-notes" class="form-textarea" placeholder="Internal evidence or notes (not shown to user)..." maxlength="500"></textarea>
+      </div>
+
+      <div class="modal-field">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="mod-appeal-allowed" checked class="checkbox"/>
+          <span>Allow account holder to submit appeal</span>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-${actionConfig.color}" onclick="executeModerationAction('${accountType}','${accountId}','${action}')">${actionConfig.emoji} Confirm ${action.charAt(0).toUpperCase() + action.slice(1)}</button>
+    </div>`
+  );
+}
+
+function executeModerationAction(accountType, accountId, action) {
+  const category = document.getElementById('mod-category').value;
+  const reason = document.getElementById('mod-reason').value.trim();
+  const notes = document.getElementById('mod-notes').value.trim();
+  const appealAllowed = document.getElementById('mod-appeal-allowed').checked;
+
+  if (!category) { showToast('Please select a reason category', 'error'); return; }
+  if (!reason || reason.length < 10) { showToast('Please provide a detailed explanation (at least 10 characters)', 'error'); return; }
+
+  const collection = accountType === 'helper' ? 'helpers' : 'users';
+  const account = (accountType === 'helper' ? helpers : users).find(x => x.id === accountId);
+  if (!account) return;
+
+  const updates = {
+    moderationUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    moderationBy: currentAdmin.email || 'Admin',
+  };
+
+  if (action === 'warn') {
+    updates.pendingWarning = true;
+    updates.warningCategory = category;
+    updates.warningReason = reason;
+    updates.warningNotes = notes;
+    updates.warnedAt = firebase.firestore.FieldValue.serverTimestamp();
+    updates.warnings = firebase.firestore.FieldValue.increment(1);
+    updates.appealAllowed = appealAllowed;
+  } else if (action === 'suspend') {
+    const duration = parseInt(document.getElementById('mod-duration').value) || 7;
+    updates.isSuspended = true;
+    updates.suspensionReasonCategory = category;
+    updates.suspensionReason = reason;
+    updates.suspensionNotes = notes;
+    updates.suspensionDuration = duration;
+    updates.suspendedAt = firebase.firestore.FieldValue.serverTimestamp();
+    updates.appealAllowed = appealAllowed;
+  } else if (action === 'block') {
+    updates.isBlocked = true;
+    updates.blockReasonCategory = category;
+    updates.blockReason = reason;
+    updates.blockNotes = notes;
+    updates.blockedAt = firebase.firestore.FieldValue.serverTimestamp();
+    updates.appealAllowed = appealAllowed;
+  }
+
+  db.collection(collection).doc(accountId).update(updates).then(() => {
+    Object.assign(account, updates);
+
+    logAudit(`${action} ${accountType}`, `${account.name || account.phone} — ${category}: ${reason.substring(0, 60)}`);
+
+    // Send notification to account holder
+    const notifMsg = {
+      warn: { t: '⚠️ Warning from Admin', b: `You received a warning: ${reason.substring(0, 100)}` },
+      suspend: { t: '⏸️ Account Suspended', b: `Your account has been suspended. Reason: ${reason.substring(0, 100)}` },
+      block: { t: '🚫 Account Blocked', b: `Your account has been blocked. Reason: ${reason.substring(0, 100)}` },
+    }[action];
+
+    db.collection('notifications').add({
+      userId: accountId, type: 'admin_action',
+      title: notifMsg.t, body: notifMsg.b,
+      data: { screen: 'AccountStatus' },
+      read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+
+    showToast(`✅ ${action}ed successfully. User notified.`, 'success');
+    closeModal();
+    if (accountType === 'user') renderUsers();
+    else renderHelpers();
+    updateOverview();
   }).catch(e => showToast('Error: ' + e.message, 'error'));
 }
 
@@ -1236,23 +1416,26 @@ function viewHelper(id) {
 
 function helperAction(id, action) {
   const h = helpers.find(x => x.id === id); if (!h) return;
+
+  // For warn/suspend/block, show moderation modal
+  if (['warn', 'suspend', 'block'].includes(action)) {
+    showModerationModal('helper', id, action, h.name || h.phone);
+    return;
+  }
+
   if (!confirm(`${action} helper "${h.name || h.phone}"?`)) return;
   const updates = {};
   if (action === 'approve') updates.status = 'approved';
   else if (action === 'reject') updates.status = 'rejected';
-  else if (action === 'block') updates.isBlocked = true;
-  else if (action === 'unblock') updates.isBlocked = false;
-  else if (action === 'suspend') updates.isSuspended = true;
-  else if (action === 'unsuspend') updates.isSuspended = false;
+  else if (action === 'unblock') { updates.isBlocked = false; updates.blockReason = ''; }
+  else if (action === 'unsuspend') { updates.isSuspended = false; updates.suspensionReason = ''; }
 
   db.collection('helpers').doc(id).update(updates).then(() => {
     Object.assign(h, updates);
     logAudit(`Helper ${action}`, `${h.name || h.phone} (${id.slice(0,8)})`);
     const msg = action === 'approve' ? '🎉 Your helper account has been approved! You can now receive requests.' :
                 action === 'reject' ? '❌ Your helper application was rejected.' :
-                action === 'block' ? '🚫 Your account has been blocked.' :
                 action === 'unblock' ? '✅ Your account has been unblocked.' :
-                action === 'suspend' ? '⚠️ Your account has been suspended.' :
                 '✅ Your account has been reactivated.';
     db.collection('notifications').add({
       userId: id, type: 'admin_action', title: 'Admin Update', body: msg,
@@ -1642,6 +1825,154 @@ function renderChats() {
         <td>${fDate(c.lastMessageAt)}</td>
       </tr>
     `).join('') + `</tbody></table>`;
+}
+
+// ── Appeals ──
+function renderAppeals() {
+  let f = appeals;
+  if (appealFilter !== 'all') f = appeals.filter(a => (a.status || 'submitted') === appealFilter);
+
+  document.getElementById('appeals-table').innerHTML = f.length === 0 ? empty('🙋','No appeals','No appeals match this filter') :
+    `<table class="table"><thead><tr>
+      <th>Appeal ID</th><th>Account</th><th>Type</th><th>Subject</th><th>Status</th><th>Date</th><th>Actions</th>
+    </tr></thead><tbody>` + f.map(a => {
+      const statusBadge = {
+        submitted: '<span class="badge badge-open">📬 Submitted</span>',
+        under_review: '<span class="badge badge-in_review">👀 Under Review</span>',
+        approved: '<span class="badge badge-approved">✅ Approved</span>',
+        rejected: '<span class="badge badge-rejected">❌ Rejected</span>',
+      }[a.status || 'submitted'];
+      const typeBadge = a.accountType === 'helper' ? '<span class="badge badge-purple">🛡️ Helper</span>' : '<span class="badge badge-primary">👥 User</span>';
+      return `<tr>
+        <td><code>${a.appealId || a.id.slice(0,6).toUpperCase()}</code></td>
+        <td>${a.accountName || '—'}<br><span class="user-meta">${a.accountPhone || ''}</span></td>
+        <td>${typeBadge}<br><span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${a.statusType || '—'}</span></td>
+        <td>${(a.subject || '—').substring(0, 50)}</td>
+        <td>${statusBadge}</td>
+        <td>${fDate(a.createdAt)}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewAppeal('${a.id}')">Review</button></td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+}
+
+function viewAppeal(id) {
+  const a = appeals.find(x => x.id === id); if (!a) return;
+  const isPending = a.status === 'submitted' || a.status === 'under_review';
+
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">🙋 Appeal #${a.appealId || a.id.slice(0,6)}</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      ${mf('Account', `${a.accountType === 'helper' ? '🛡️ Helper' : '👥 User'}: ${a.accountName || '—'}`)}
+      ${mf('Contact', a.accountPhone || '—')}
+      ${mf('Account ID', `<code>${a.accountId || '—'}</code>`)}
+      ${mf('Appealing Against', `<span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${a.statusType || '—'}</span>`)}
+      ${mf('Original Reason', a.originalReason || '—')}
+
+      <div class="modal-section-header">📝 Appeal Submission</div>
+      ${mf('Subject', `<strong>${a.subject || '—'}</strong>`)}
+      ${mf('Explanation', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${a.explanation || '—'}</div>`)}
+      ${mf('Submitted', fDate(a.createdAt))}
+      ${mf('Current Status', `<span class="badge badge-${a.status === 'approved' ? 'approved' : a.status === 'rejected' ? 'rejected' : 'pending'}">${a.status || 'submitted'}</span>`)}
+
+      ${a.adminReply ? `
+      <div class="modal-section-header">💬 Admin Reply</div>
+      <div style="background:var(--success-light);padding:12px;border-radius:8px;border-left:3px solid var(--success)">
+        <div style="font-size:13px;color:var(--text);white-space:pre-wrap">${a.adminReply}</div>
+        <div style="font-size:11px;color:var(--text-mute);margin-top:6px">— ${a.repliedBy || 'Admin'} · ${fDate(a.repliedAt)}</div>
+      </div>` : ''}
+
+      ${isPending ? `
+      <div class="modal-section-header">⚙️ Review Decision</div>
+      <div class="modal-field">
+        <div class="modal-label">Reply to Appellant</div>
+        <textarea id="appeal-reply" class="form-textarea" placeholder="Explain your decision..."></textarea>
+      </div>` : ''}
+    </div>
+    <div class="modal-footer">
+      ${isPending ? `
+        <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+        <button class="btn btn-danger" onclick="decideAppeal('${a.id}','rejected')">❌ Reject Appeal</button>
+        <button class="btn btn-success" onclick="decideAppeal('${a.id}','approved')">✅ Approve & Reinstate</button>
+      ` : `
+        <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      `}
+    </div>`
+  );
+}
+
+function decideAppeal(id, decision) {
+  const a = appeals.find(x => x.id === id); if (!a) return;
+  const reply = document.getElementById('appeal-reply').value.trim();
+
+  if (!reply || reply.length < 10) {
+    showToast('Please provide a detailed reply (at least 10 characters)', 'error');
+    return;
+  }
+
+  const msg = decision === 'approved' ?
+    'Approve this appeal? The account will be automatically reinstated.' :
+    'Reject this appeal? The account will remain in its current state.';
+  if (!confirm(msg)) return;
+
+  const updates = {
+    status: decision,
+    adminReply: reply,
+    repliedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    repliedBy: currentAdmin.email || 'Admin',
+  };
+
+  // Chain of actions
+  (async () => {
+    try {
+      // Update appeal
+      await db.collection('appeals').doc(id).update(updates);
+      Object.assign(a, updates);
+
+      // If approved, reinstate the account
+      if (decision === 'approved') {
+        const collection = a.accountType === 'helper' ? 'helpers' : 'users';
+        const accountUpdates = {};
+        if (a.statusType === 'suspended') {
+          accountUpdates.isSuspended = false;
+          accountUpdates.suspensionReason = '';
+        } else if (a.statusType === 'blocked') {
+          accountUpdates.isBlocked = false;
+          accountUpdates.blockReason = '';
+        }
+        accountUpdates.reinstatedAt = firebase.firestore.FieldValue.serverTimestamp();
+        accountUpdates.reinstatedBy = currentAdmin.email || 'Admin';
+
+        await db.collection(collection).doc(a.accountId).update(accountUpdates);
+      }
+
+      // Notify appellant
+      if (a.accountId) {
+        const notifTitle = decision === 'approved' ? '✅ Appeal Approved' : '❌ Appeal Rejected';
+        const notifBody = decision === 'approved' ?
+          `Your appeal was approved! Your account has been reinstated. Admin said: ${reply.substring(0, 100)}` :
+          `Your appeal was rejected. Admin said: ${reply.substring(0, 100)}`;
+
+        await db.collection('notifications').add({
+          userId: a.accountId, type: 'appeal_decision',
+          title: notifTitle, body: notifBody,
+          data: { appealId: id, screen: decision === 'approved' ? 'UserTabs' : 'AccountStatus' },
+          read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      logAudit(`Appeal ${decision}`, `#${a.appealId}: ${a.accountName} — ${reply.substring(0, 60)}`);
+      showToast(`✅ Appeal ${decision}. ${decision === 'approved' ? 'Account reinstated.' : 'Appellant notified.'}`, 'success');
+      closeModal();
+      loadAppeals().then(renderAppeals);
+      loadUsers().then(renderUsers);
+      loadHelpers().then(renderHelpers);
+    } catch(e) {
+      showToast('Error: ' + e.message, 'error');
+    }
+  })();
 }
 
 // ── Analytics ──
