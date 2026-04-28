@@ -177,6 +177,7 @@ body {
 .badge-purple     { background: var(--purple-light); color: var(--purple); }
 .badge-gray       { background: var(--bg-alt); color: var(--text-sec); }
 .badge-pending    { background: var(--warning-light); color: var(--warning); }
+.badge-resubmitted{ background: var(--info-light); color: var(--info); }
 .badge-approved   { background: var(--success-light); color: var(--success); }
 .badge-rejected   { background: var(--danger-light); color: var(--danger); }
 .badge-active     { background: var(--success-light); color: var(--success); }
@@ -514,6 +515,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
           <div class="filter-bar" id="alert-filters">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="pending">⏳ Pending Review</button>
+            <button class="filter-btn" data-filter="resubmitted">🔄 Resubmitted</button>
             <button class="filter-btn" data-filter="approved">✅ Approved</button>
             <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
             <button class="filter-btn" data-filter="info_requested">❓ Info Requested</button>
@@ -843,7 +845,7 @@ function loadAlerts() {
   return db.collection('emergencyAlerts').get().then(snap => {
     alerts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
-    setBadge('badge-alerts', alerts.filter(a => (a.status||'pending') === 'pending').length);
+    setBadge('badge-alerts', alerts.filter(a => (a.status||'pending') === 'pending' || a.status === 'resubmitted').length);
   }).catch(e => { console.log('Load alerts error:', e); alerts = []; });
 }
 function loadReports() {
@@ -887,7 +889,7 @@ function setBadge(id, n) {
 // ── Overview ──
 function updateOverview() {
   const pendingHelpers = helpers.filter(h => (h.status||'pending') === 'pending').length;
-  const pendingAlerts = alerts.filter(a => (a.status||'pending') === 'pending').length;
+  const pendingAlerts = alerts.filter(a => (a.status||'pending') === 'pending' || a.status === 'resubmitted').length;
   const pendingVerify = helpers.filter(h => h.verificationStatus === 'pending').length;
   const openReports = reports.filter(r => (r.status||'open') === 'open').length;
 
@@ -1483,8 +1485,10 @@ function renderAlerts() {
       <th>Alert</th><th>Type</th><th>Urgency</th><th>Submitter</th><th>Districts</th><th>Status</th><th>Date</th><th>Actions</th>
     </tr></thead><tbody>` + f.map(a => {
       const urgency = a.urgency || 'low';
+      const resubmitFlag = a.status === 'resubmitted' || (a.resubmissionCount && a.resubmissionCount > 0) ?
+        ` <span class="badge badge-resubmitted" style="font-size:9px">🔄 v${a.version || 2}</span>` : '';
       return `<tr>
-        <td><strong>${a.title || 'Untitled'}</strong></td>
+        <td><strong>${a.title || 'Untitled'}</strong>${resubmitFlag}</td>
         <td><span class="badge badge-gray">${(a.alertType || '—').replace('_', ' ')}</span></td>
         <td><span class="badge badge-${urgency}">${urgency}</span></td>
         <td>${a.contactName || a.userName || '—'}<br><span class="user-meta">${a.contactPhone || ''}</span></td>
@@ -1552,9 +1556,16 @@ function viewAlert(id) {
       <button class="modal-close" onclick="closeModal()">×</button>
     </div>
     <div class="modal-body">
+      ${a.status === 'resubmitted' ? `
+        <div style="background:var(--info-light);padding:12px;border-radius:10px;margin-bottom:16px;border-left:4px solid var(--info)">
+          <div style="font-weight:800;color:var(--info);font-size:14px">🔄 Resubmitted Alert${a.resubmissionCount ? ` (Attempt ${a.resubmissionCount + 1})` : ''}</div>
+          <div style="font-size:12px;color:var(--text-sec);margin-top:4px">User updated this alert with new information after your request. Resubmitted on ${fDate(a.resubmittedAt)}.</div>
+        </div>
+      ` : ''}
       ${mf('Type', (a.alertType||'—').replace('_',' '))}
       ${mf('Urgency', `<span class="badge badge-${a.urgency||'low'}">${a.urgency||'—'}</span>`)}
       ${mf('Status', `<span class="badge badge-${a.status||'pending'}">${(a.status||'pending').replace('_',' ')}</span>`)}
+      ${a.version && a.version > 1 ? mf('Version', `v${a.version} (Resubmitted ${a.resubmissionCount} time${a.resubmissionCount !== 1 ? 's' : ''})`) : ''}
       ${mf('Submitter', `${a.contactName || a.userName || '—'} (${a.contactPhone || a.userPhone || '—'})`)}
       ${mf('Audience', a.audienceType || 'both')}
       ${mf('Target Districts', (a.targetDistricts||[]).join(', ') || '—')}
@@ -1567,7 +1578,7 @@ function viewAlert(id) {
       ${photosHtml}
     </div>
     <div class="modal-footer">
-      ${(a.status||'pending') === 'pending' ?
+      ${(a.status||'pending') === 'pending' || a.status === 'resubmitted' ?
         `<button class="btn btn-danger btn-sm" onclick="rejectAlert('${a.id}')">❌ Reject</button>
          <button class="btn btn-warning btn-sm" onclick="requestAlertInfo('${a.id}')">❓ Request Info</button>
          <button class="btn btn-success btn-sm" onclick="approveAlert('${a.id}')">✅ Approve & Broadcast</button>` :
