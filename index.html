@@ -533,10 +533,13 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="card">
           <div class="filter-bar" id="report-filters">
             <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="technical">⚙️ Technical Errors</button>
+            <button class="filter-btn" data-filter="complaint">🗣️ Complaints</button>
             <button class="filter-btn" data-filter="user">👥 User Reports</button>
             <button class="filter-btn" data-filter="helper">🛡️ Helper Reports</button>
             <button class="filter-btn" data-filter="open">📬 Open</button>
             <button class="filter-btn" data-filter="in_review">👀 In Review</button>
+            <button class="filter-btn" data-filter="critical">🔴 Critical</button>
             <button class="filter-btn" data-filter="resolved">✅ Resolved</button>
           </div>
           <div class="table-wrap" id="reports-table"></div>
@@ -1697,24 +1700,31 @@ function requestAlertInfo(id) {
 // ── Reports ──
 function renderReports() {
   let f = reports;
-  if (reportFilter === 'user') f = f.filter(r => r.reporterType === 'user');
+  if (reportFilter === 'technical') f = f.filter(r => r.primaryType === 'technical');
+  else if (reportFilter === 'complaint') f = f.filter(r => r.primaryType === 'complaint');
+  else if (reportFilter === 'user') f = f.filter(r => r.reporterType === 'user');
   else if (reportFilter === 'helper') f = f.filter(r => r.reporterType === 'helper');
+  else if (reportFilter === 'critical') f = f.filter(r => (r.severity || r.priority) === 'critical');
   else if (['open','in_review','waiting_for_response','resolved','closed'].includes(reportFilter)) {
     f = f.filter(r => (r.status||'open') === reportFilter);
   }
 
   document.getElementById('reports-table').innerHTML = f.length === 0 ? empty('🐛','No reports','No reports match') :
     `<table class="table"><thead><tr>
-      <th>Ticket</th><th>Reporter</th><th>Type</th><th>Category</th><th>Subject</th><th>Priority</th><th>Status</th><th>Date</th><th>Actions</th>
+      <th>Ticket</th><th>Reporter</th><th>Primary Type</th><th>Category</th><th>Subject</th><th>Severity</th><th>Status</th><th>Date</th><th>Actions</th>
     </tr></thead><tbody>` + f.map(r => {
       const typeBadge = r.reporterType === 'helper' ? '<span class="badge badge-purple">🛡️ Helper</span>' : '<span class="badge badge-primary">👥 User</span>';
+      const primaryBadge = r.primaryType === 'complaint' ?
+        '<span class="badge badge-danger">🗣️ Complaint</span>' :
+        '<span class="badge badge-info">⚙️ Technical</span>';
+      const severity = r.severity || r.priority || 'medium';
       return `<tr>
-        <td><code>${r.ticketId || r.id.slice(0,6).toUpperCase()}</code></td>
-        <td>${r.reporterName || '—'}<br><span class="user-meta">${r.reporterPhone || ''}</span></td>
-        <td>${typeBadge}</td>
-        <td><span class="badge badge-gray">${(r.category || '—').replace('_',' ')}</span></td>
-        <td>${r.subject || '—'}</td>
-        <td><span class="badge badge-${r.priority || 'medium'}">${r.priority || 'medium'}</span></td>
+        <td><code style="font-weight:700">${r.ticketId || r.id.slice(0,6).toUpperCase()}</code></td>
+        <td>${r.reporterName || '—'}<br><span class="user-meta">${typeBadge} ${r.reporterPhone || ''}</span></td>
+        <td>${primaryBadge}</td>
+        <td>${r.categoryLabel || (r.category || '—').replace('_',' ')}</td>
+        <td>${(r.subject || '—').substring(0, 50)}</td>
+        <td><span class="badge badge-${severity}">${severity}</span></td>
         <td><span class="badge badge-${r.status || 'open'}">${(r.status || 'open').replace('_',' ')}</span></td>
         <td>${fDate(r.createdAt)}</td>
         <td><button class="btn btn-primary btn-sm" onclick="viewReport('${r.id}')">Handle</button></td>
@@ -1727,22 +1737,45 @@ function viewReport(id) {
   const statuses = ['open','in_review','waiting_for_response','resolved','closed'];
   const priorities = ['low','medium','high','critical'];
   const currentStatus = r.status || 'open';
-  const currentPriority = r.priority || 'medium';
+  const currentPriority = r.priority || r.severity || 'medium';
+
+  const primaryBadge = r.primaryType === 'complaint' ?
+    '<span class="badge badge-danger">🗣️ Complaint</span>' :
+    r.primaryType === 'technical' ?
+    '<span class="badge badge-info">⚙️ Technical Error</span>' :
+    '<span class="badge badge-gray">— Unclassified</span>';
 
   showModal(
     `<div class="modal-header">
-      <div class="modal-title">🐛 Report #${r.ticketId || r.id.slice(0,6)}</div>
+      <div class="modal-title">🎫 ${r.ticketId || 'Ticket #' + r.id.slice(0,6)}</div>
       <button class="modal-close" onclick="closeModal()">×</button>
     </div>
     <div class="modal-body">
-      ${mf('Reporter', `${r.reporterType === 'helper' ? '🛡️ Helper' : '👥 User'}: ${r.reporterName || '—'}`)}
-      ${mf('Contact', r.reporterPhone || '—')}
-      ${mf('Category', (r.category || '—').replace('_', ' ').toUpperCase())}
+
+      <div class="modal-section-header">📋 Classification</div>
+      ${mf('Primary Type', primaryBadge)}
+      ${mf('Category', r.categoryLabel || (r.category || '—').replace('_', ' ').toUpperCase())}
+      ${mf('Severity', `<span class="badge badge-${r.severity || r.priority || 'medium'}">${(r.severity || r.priority || 'medium').toUpperCase()}</span>`)}
+      ${r.slaTarget ? mf('SLA Target', `${r.slaTarget} hours from submission`) : ''}
+
+      <div class="modal-section-header">👤 Reporter Details</div>
+      ${mf('Type', r.reporterType === 'helper' ? '🛡️ Helper' : '👥 User')}
+      ${mf('Name', `<strong>${r.reporterName || '—'}</strong>`)}
+      ${mf('Account ID', `<code>${r.reporterId || '—'}</code>`)}
+      ${mf('Phone', r.reporterPhone || '—')}
+      ${r.reporterEmail ? mf('Email', r.reporterEmail) : ''}
+      ${r.reporterDistrict ? mf('District', r.reporterDistrict) : ''}
+
+      <div class="modal-section-header">🐛 Issue Details</div>
       ${mf('Subject', `<strong>${r.subject || '—'}</strong>`)}
       ${mf('Description', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${r.description || '—'}</div>`)}
-      ${mf('Device', `${r.deviceInfo || '—'} · v${r.appVersion || '—'}`)}
-      ${mf('Submitted', fDate(r.createdAt))}
       ${r.screenshotUrl ? `<div class="modal-field"><div class="modal-label">Screenshot</div><a href="${r.screenshotUrl}" target="_blank"><img src="${r.screenshotUrl}" style="max-width:100%;max-height:400px;border-radius:8px;margin-top:6px"/></a></div>` : ''}
+
+      <div class="modal-section-header">📱 System Info</div>
+      ${mf('Platform', r.platform || '—')}
+      ${mf('Device', r.deviceInfo || '—')}
+      ${mf('App Version', r.appVersion || '—')}
+      ${mf('Submitted', fDate(r.createdAt))}
 
       <div class="modal-section-header">⚙️ Admin Actions</div>
       <div class="modal-field">
@@ -1758,10 +1791,18 @@ function viewReport(id) {
         </select>
       </div>
       <div class="modal-field">
-        <div class="modal-label">Reply to Reporter</div>
-        <textarea id="rpt-reply" class="form-textarea" placeholder="Write your response...">${r.adminReply || ''}</textarea>
+        <div class="modal-label">Assigned To (Optional)</div>
+        <input type="text" id="rpt-assigned" class="form-input" value="${r.assignedTo || ''}" placeholder="e.g. support@team.com"/>
       </div>
-      ${r.adminReply ? `<div style="font-size:11px;color:var(--text-mute);margin-top:8px"><i>Last reply: ${fDate(r.repliedAt)}</i></div>` : ''}
+      <div class="modal-field">
+        <div class="modal-label">Internal Notes (Admin Only — not shown to user)</div>
+        <textarea id="rpt-notes" class="form-textarea" placeholder="Internal investigation notes...">${r.internalNotes || ''}</textarea>
+      </div>
+      <div class="modal-field">
+        <div class="modal-label">Reply to Reporter (Visible to user)</div>
+        <textarea id="rpt-reply" class="form-textarea" placeholder="Type your response to the reporter...">${r.adminReply || ''}</textarea>
+      </div>
+      ${r.adminReply ? `<div style="font-size:11px;color:var(--text-mute);margin-top:8px"><i>Last reply by ${r.repliedBy || 'Admin'}: ${fDate(r.repliedAt)}</i></div>` : ''}
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -1775,11 +1816,19 @@ function saveReport(id) {
   const newStatus = document.getElementById('rpt-status').value;
   const newPriority = document.getElementById('rpt-priority').value;
   const reply = document.getElementById('rpt-reply').value.trim();
+  const assignedTo = document.getElementById('rpt-assigned').value.trim();
+  const notes = document.getElementById('rpt-notes').value.trim();
 
   const updates = {
     status: newStatus, priority: newPriority,
+    assignedTo, internalNotes: notes,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
   };
+
+  if (newStatus === 'resolved' && r.status !== 'resolved') {
+    updates.resolvedAt = firebase.firestore.FieldValue.serverTimestamp();
+  }
+
   const replyChanged = reply && reply !== (r.adminReply || '');
   if (replyChanged) {
     updates.adminReply = reply;
@@ -1791,8 +1840,8 @@ function saveReport(id) {
     Object.assign(r, updates);
     if (r.reporterId) {
       const msg = replyChanged ?
-        `Support replied to your report #${r.ticketId || ''}. Tap to view.` :
-        `Report #${r.ticketId || ''} status: ${newStatus.replace('_', ' ')}`;
+        `Support replied to your report ${r.ticketId || ''}. Tap to view.` :
+        `Report ${r.ticketId || ''} status updated: ${newStatus.replace('_', ' ')}`;
       db.collection('notifications').add({
         userId: r.reporterId, type: 'report_update',
         title: '💬 Report Update', body: msg,
@@ -1800,12 +1849,12 @@ function saveReport(id) {
         read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       });
     }
-    logAudit('Update report', `#${r.ticketId || id.slice(0,6)}: ${newStatus}`);
+    logAudit('Update report', `${r.ticketId || id.slice(0,6)}: ${newStatus}${replyChanged ? ' + replied' : ''}`);
     showToast('✅ Report updated. Reporter notified.', 'success');
     closeModal();
     renderReports();
     updateOverview();
-  });
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
 }
 
 // ── Reviews ──
