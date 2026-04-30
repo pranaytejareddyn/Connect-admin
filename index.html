@@ -349,6 +349,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-section">Insights</div>
     <div class="nav-item" data-page="regions"><span class="nav-icon">🗺️</span>Regions</div>
     <div class="nav-item" data-page="reviews"><span class="nav-icon">⭐</span>Reviews</div>
+    <div class="nav-item" data-page="agreements"><span class="nav-icon">📋</span>Agreements <span class="nav-badge" id="badge-agreements" style="display:none">0</span></div>
     <div class="nav-item" data-page="chats"><span class="nav-icon">💬</span>Chats</div>
 
     <div class="nav-section">System</div>
@@ -593,6 +594,26 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="card"><div class="table-wrap" id="reviews-table"></div></div>
       </div>
 
+      <!-- AGREEMENTS -->
+      <div class="page" id="page-agreements">
+        <div class="page-head">
+          <div><div class="page-title">Service Agreements</div><div class="page-sub">Mutual commitment forms between users and helpers</div></div>
+          <button class="btn btn-ghost" onclick="exportCSV('agreements')">📥 Export CSV</button>
+        </div>
+        <div class="card">
+          <div class="filter-bar" id="agreement-filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="pending">⏳ Pending</button>
+            <button class="filter-btn" data-filter="accepted">✅ Locked</button>
+            <button class="filter-btn" data-filter="changes_requested">✏️ Counter Offers</button>
+            <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
+            <button class="filter-btn" data-filter="completed">🎉 Completed</button>
+            <button class="filter-btn" data-filter="disputed">⚠️ Disputed</button>
+          </div>
+          <div class="table-wrap" id="agreements-table"></div>
+        </div>
+      </div>
+
       <!-- CHATS -->
       <div class="page" id="page-chats">
         <div class="page-head"><div><div class="page-title">Chats</div><div class="page-sub">Platform conversations</div></div></div>
@@ -658,8 +679,8 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 
 // ── State ──
-let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[];
-let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all';
+let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[];
+let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
 let userSearchText='', helperSearchText='', userDistrict='', helperDistrict='';
 let selectedUsers=new Set(), selectedHelpers=new Set();
 let currentAdmin = { email: '', name: 'Admin' };
@@ -785,6 +806,13 @@ document.getElementById('appeal-filters').addEventListener('click', e => {
   e.target.classList.add('active');
   renderAppeals();
 });
+document.getElementById('agreement-filters').addEventListener('click', e => {
+  if (!e.target.classList.contains('filter-btn')) return;
+  agreementFilter = e.target.getAttribute('data-filter');
+  document.querySelectorAll('#agreement-filters .filter-btn').forEach(b => b.classList.remove('active'));
+  e.target.classList.add('active');
+  renderAgreements();
+});
 
 // Search
 document.getElementById('user-search').addEventListener('input', e => { userSearchText = e.target.value.toLowerCase(); renderUsers(); });
@@ -820,7 +848,7 @@ document.getElementById('modal').addEventListener('click', e => {
 
 // ── Load All Data ──
 function loadAll() {
-  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals()])
+  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements()])
     .then(() => {
       updateOverview();
       renderUsers();
@@ -831,6 +859,7 @@ function loadAll() {
       renderReviews();
       renderChats();
       renderAppeals();
+      renderAgreements();
     });
 }
 
@@ -874,6 +903,13 @@ function loadAppeals() {
       .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
     setBadge('badge-appeals', appeals.filter(a => a.status === 'submitted').length);
   }).catch(e => { appeals = []; });
+}
+function loadAgreements() {
+  return db.collection('agreements').get().then(snap => {
+    agreements = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+    setBadge('badge-agreements', agreements.filter(a => a.status === 'disputed').length);
+  }).catch(e => { console.log('Load agreements error:', e); agreements = []; });
 }
 function loadAuditLogs() {
   db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).get().then(snap => {
@@ -1963,6 +1999,160 @@ function viewAppeal(id) {
   );
 }
 
+// ── Agreements ──
+function renderAgreements() {
+  let f = agreements;
+  if (agreementFilter !== 'all') f = agreements.filter(a => (a.status || 'pending') === agreementFilter);
+
+  const target = document.getElementById('agreements-table');
+  if (!target) return;
+
+  target.innerHTML = f.length === 0 ? empty('📋','No agreements','No service commitment forms match this filter') :
+    `<table class="table"><thead><tr>
+      <th>Agreement ID</th><th>Initiator</th><th>Parties</th><th>Service</th><th>When</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th>
+    </tr></thead><tbody>` + f.map(a => {
+      const statusBadges = {
+        pending:           '<span class="badge badge-pending">⏳ Pending</span>',
+        accepted:          '<span class="badge badge-approved">🔒 Locked</span>',
+        rejected:          '<span class="badge badge-rejected">❌ Rejected</span>',
+        changes_requested: '<span class="badge badge-warning">✏️ Counter</span>',
+        completed:         '<span class="badge badge-info">🎉 Completed</span>',
+        disputed:          '<span class="badge badge-danger">⚠️ Disputed</span>',
+        cancelled:         '<span class="badge badge-gray">🚫 Cancelled</span>',
+      };
+      const statusBadge = statusBadges[a.status] || statusBadges.pending;
+      const initiator = a.initiator === 'user' ? '👥 User' : '🛡️ Helper';
+      const versionTag = a.currentVersion > 1 ? ` <span class="badge badge-info" style="font-size:9px">v${a.currentVersion}</span>` : '';
+      return `<tr>
+        <td><code style="font-weight:700">${a.agreementId || a.id.slice(0,6).toUpperCase()}</code>${versionTag}</td>
+        <td>${initiator}</td>
+        <td>${a.userName || '—'}<br><span class="user-meta">↔ ${a.helperName || '—'}</span></td>
+        <td>${(a.taskDescription || '—').substring(0, 40)}<br><span class="user-meta">${(a.category || '—')}</span></td>
+        <td>${a.date || '—'}<br><span class="user-meta">${a.startTime || '—'} · ${a.durationHours || '—'}h</span></td>
+        <td><strong>₹${parseFloat(a.amount || '0').toLocaleString('en-IN')}</strong><br><span class="user-meta">${a.paymentMethod || '—'}</span></td>
+        <td>${statusBadge}</td>
+        <td>${fDate(a.createdAt)}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewAgreement('${a.id}')">View</button></td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+}
+
+function viewAgreement(id) {
+  const a = agreements.find(x => x.id === id); if (!a) return;
+  const remaining = a.advancePaid && a.advanceAmount
+    ? Math.max(0, parseFloat(a.amount || '0') - parseFloat(a.advanceAmount || '0'))
+    : parseFloat(a.amount || '0');
+
+  const versionHistoryHtml = a.versionHistory && a.versionHistory.length > 0 ?
+    `<div class="modal-section-header">📜 Version History</div>` +
+    a.versionHistory.map(v => `
+      <div style="background:var(--bg-alt);padding:10px;border-radius:8px;margin-bottom:6px;font-size:12px">
+        <strong>v${v.version}</strong> · Changed by ${v.changedBy === 'user' ? '👥 User' : '🛡️ Helper'} · ${fDate(v.changedAt)}
+        ${v.fieldsChanged ? `<div style="color:var(--text-mute);margin-top:4px">Fields: ${v.fieldsChanged.join(', ')}</div>` : ''}
+      </div>
+    `).join('') : '';
+
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">📋 ${a.agreementId || 'Agreement'}</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-section-header">📝 Summary</div>
+      ${mf('Agreement ID', `<code>${a.agreementId || a.id}</code>`)}
+      ${mf('Initiator', a.initiator === 'user' ? '👥 User started this' : '🛡️ Helper started this')}
+      ${mf('Status', `<span class="badge badge-${a.status === 'accepted' ? 'approved' : a.status === 'rejected' || a.status === 'disputed' ? 'rejected' : 'pending'}">${a.status || 'pending'}</span>`)}
+      ${a.currentVersion > 1 ? mf('Version', `v${a.currentVersion}`) : ''}
+
+      <div class="modal-section-header">👥 Parties</div>
+      ${mf('User', `${a.userName || '—'} · ${a.userPhone || '—'}<br><code>${a.userId || ''}</code>`)}
+      ${mf('Helper', `${a.helperName || '—'} · ${a.helperPhone || '—'}<br><code>${a.helperId || ''}</code>`)}
+
+      <div class="modal-section-header">🛠️ Service Details</div>
+      ${mf('Category', (a.category || '—').replace('_', ' '))}
+      ${mf('Task', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px;white-space:pre-wrap">${a.taskDescription || '—'}</div>`)}
+      ${mf('Location', `📍 ${a.location || '—'}`)}
+      ${mf('Date', a.date || '—')}
+      ${mf('Start Time', a.startTime || '—')}
+      ${mf('Duration', `${a.durationHours || '—'} hour(s)`)}
+      ${a.isUrgent ? mf('Urgency', '<span class="badge badge-danger">🚨 URGENT</span>') : ''}
+
+      <div class="modal-section-header">💰 Payment Terms</div>
+      ${mf('Amount', `<strong>₹${parseFloat(a.amount || '0').toLocaleString('en-IN')}</strong>`)}
+      ${mf('Method', (a.paymentMethod || '—').toUpperCase())}
+      ${mf('Advance Paid', a.advancePaid ? `Yes — ₹${a.advanceAmount}` : 'No')}
+      ${mf('Remaining Due', `<strong>₹${remaining.toLocaleString('en-IN')}</strong>`)}
+
+      <div class="modal-section-header">📋 Conditions</div>
+      ${mf('Materials Included', a.materialsIncluded ? '✅ Yes' : '❌ No')}
+      ${mf('Transport Included', a.transportIncluded ? '✅ Yes' : '❌ No')}
+      ${a.notes ? mf('Notes', a.notes) : ''}
+
+      <div class="modal-section-header">⏱️ Timeline</div>
+      ${mf('Created', fDate(a.createdAt))}
+      ${a.userAcceptedAt ? mf('User Accepted', `✅ ${fDate(a.userAcceptedAt)}`) : ''}
+      ${a.helperAcceptedAt ? mf('Helper Accepted', `✅ ${fDate(a.helperAcceptedAt)}`) : ''}
+      ${a.lockedAt ? mf('Locked', `🔒 ${fDate(a.lockedAt)}`) : ''}
+      ${a.completedAt ? mf('Completed', `🎉 ${fDate(a.completedAt)}`) : ''}
+      ${a.cancelledAt ? mf('Cancelled', fDate(a.cancelledAt)) : ''}
+      ${a.rejectionReason ? mf('Rejection Reason', a.rejectionReason) : ''}
+      ${a.changeRequestNotes ? mf('Change Request', a.changeRequestNotes) : ''}
+
+      ${versionHistoryHtml}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      ${a.status !== 'disputed' ?
+        `<button class="btn btn-warning btn-sm" onclick="markAgreementDisputed('${a.id}')">⚠️ Flag as Disputed</button>` :
+        `<button class="btn btn-success btn-sm" onclick="resolveAgreementDispute('${a.id}')">✅ Mark Dispute Resolved</button>`}
+    </div>`
+  );
+}
+
+function markAgreementDisputed(id) {
+  const reason = prompt('Reason for marking this as disputed (visible in audit log):');
+  if (!reason) return;
+  db.collection('agreements').doc(id).update({
+    status: 'disputed',
+    disputeReason: reason,
+    disputedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    disputedBy: currentAdmin.email || 'Admin',
+  }).then(() => {
+    const a = agreements.find(x => x.id === id);
+    if (a) {
+      a.status = 'disputed';
+      logAudit('Mark agreement disputed', `${a.agreementId} — ${reason}`);
+      // Notify both parties
+      [a.userId, a.helperId].forEach(uid => {
+        if (uid) db.collection('notifications').add({
+          userId: uid, type: 'agreement_disputed',
+          title: '⚠️ Agreement Flagged',
+          body: `Agreement ${a.agreementId} has been flagged as disputed by admin. Please contact support.`,
+          data: { agreementId: id, screen: 'AgreementDetail' },
+          read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+    }
+    showToast('✅ Agreement marked disputed. Both parties notified.', 'success');
+    closeModal();
+    renderAgreements();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+function resolveAgreementDispute(id) {
+  if (!confirm('Mark this dispute as resolved? Status will revert to accepted.')) return;
+  db.collection('agreements').doc(id).update({
+    status: 'accepted',
+    disputeResolvedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }).then(() => {
+    const a = agreements.find(x => x.id === id);
+    if (a) { a.status = 'accepted'; logAudit('Resolve agreement dispute', a.agreementId); }
+    showToast('✅ Dispute resolved.', 'success');
+    closeModal();
+    renderAgreements();
+  });
+}
+
 function decideAppeal(id, decision) {
   const a = appeals.find(x => x.id === id); if (!a) return;
   const reply = document.getElementById('appeal-reply').value.trim();
@@ -2270,6 +2460,15 @@ function exportCSV(type) {
     headers = ['ID', 'Name', 'Phone', 'District', 'Skills', 'Rating', 'Jobs', 'Status', 'Verified'];
     data = helpers.map(h => [h.id, h.name||'', h.phone||'', h.district||'', (h.skills||[]).join(';'),
       h.rating||0, h.totalRequests||0, h.status||'pending', h.isVerified ? 'Yes' : 'No']);
+  } else if (type === 'agreements') {
+    headers = ['Agreement ID', 'Status', 'Initiator', 'User', 'Helper', 'Category', 'Task', 'Location', 'Date', 'Time', 'Amount', 'Method', 'Created'];
+    data = agreements.map(a => [
+      a.agreementId || a.id, a.status || 'pending', a.initiator || '—',
+      a.userName || '', a.helperName || '', a.category || '',
+      (a.taskDescription || '').substring(0, 100), a.location || '',
+      a.date || '', a.startTime || '',
+      a.amount || 0, a.paymentMethod || '', fDate(a.createdAt)
+    ]);
   } else if (type === 'overview') {
     headers = ['Metric', 'Value'];
     data = [
