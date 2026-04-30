@@ -354,6 +354,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
 
     <div class="nav-section">System</div>
     <div class="nav-item" data-page="notifications"><span class="nav-icon">🔔</span>Broadcasts</div>
+    <div class="nav-item" data-page="service-control"><span class="nav-icon">🚧</span>Service Control <span class="nav-badge" id="badge-service-control" style="display:none">0</span></div>
     <div class="nav-item" data-page="audit"><span class="nav-icon">📜</span>Audit Logs</div>
 
     <div class="sidebar-footer">
@@ -652,6 +653,35 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         </div>
       </div>
 
+      <!-- SERVICE CONTROL -->
+      <div class="page" id="page-service-control">
+        <div class="page-head">
+          <div>
+            <div class="page-title">🚧 Regional Service Control</div>
+            <div class="page-sub">Pause services in selected regions during emergencies</div>
+          </div>
+          <button class="btn btn-danger" onclick="openCreateRestrictionModal()">+ Create Restriction</button>
+        </div>
+
+        <div class="stats-grid" id="restriction-stats"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">Active Restrictions</div>
+            <div class="card-sub">Currently in effect</div>
+          </div>
+          <div class="table-wrap" id="restrictions-active-table"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">History</div>
+            <div class="card-sub">Past restrictions</div>
+          </div>
+          <div class="table-wrap" id="restrictions-history-table"></div>
+        </div>
+      </div>
+
       <!-- AUDIT -->
       <div class="page" id="page-audit">
         <div class="page-head"><div><div class="page-title">Audit Logs</div><div class="page-sub">All admin actions tracked</div></div></div>
@@ -679,7 +709,7 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 
 // ── State ──
-let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[];
+let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[];
 let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
 let userSearchText='', helperSearchText='', userDistrict='', helperDistrict='';
 let selectedUsers=new Set(), selectedHelpers=new Set();
@@ -760,6 +790,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'regions') renderRegions();
     if (page === 'moderation') renderModeration();
     if (page === 'audit') loadAuditLogs();
+    if (page === 'service-control') renderRestrictions();
   });
 });
 
@@ -848,7 +879,7 @@ document.getElementById('modal').addEventListener('click', e => {
 
 // ── Load All Data ──
 function loadAll() {
-  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements()])
+  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements(), loadRestrictions()])
     .then(() => {
       updateOverview();
       renderUsers();
@@ -860,6 +891,7 @@ function loadAll() {
       renderChats();
       renderAppeals();
       renderAgreements();
+      renderRestrictions();
     });
 }
 
@@ -910,6 +942,13 @@ function loadAgreements() {
       .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
     setBadge('badge-agreements', agreements.filter(a => a.status === 'disputed').length);
   }).catch(e => { console.log('Load agreements error:', e); agreements = []; });
+}
+function loadRestrictions() {
+  return db.collection('serviceRestrictions').get().then(snap => {
+    restrictions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+    setBadge('badge-service-control', restrictions.filter(r => r.status === 'active').length);
+  }).catch(e => { console.log('Load restrictions error:', e); restrictions = []; });
 }
 function loadAuditLogs() {
   db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).get().then(snap => {
@@ -2151,6 +2190,334 @@ function resolveAgreementDispute(id) {
     closeModal();
     renderAgreements();
   });
+}
+
+// ── Service Control ──
+const TELANGANA_DISTRICT_LIST = ['Adilabad','Bhadradri Kothagudem','Hanamkonda','Hyderabad','Jagtial','Jangaon','Jayashankar Bhupalpally','Jogulamba Gadwal','Kamareddy','Karimnagar','Khammam','Kumuram Bheem Asifabad','Mahabubabad','Mahabubnagar','Mancherial','Medak','Medchal–Malkajgiri','Mulugu','Nagarkurnool','Nalgonda','Narayanpet','Nirmal','Nizamabad','Peddapalli','Rajanna Sircilla','Rangareddy','Sangareddy','Siddipet','Suryapet','Vikarabad','Wanaparthy','Warangal','Yadadri Bhuvanagiri'];
+
+const FEATURE_KEYS = [
+  { key: 'newRequests',        label: 'New requests / bookings' },
+  { key: 'chat',               label: 'Chat' },
+  { key: 'calls',              label: 'Calls' },
+  { key: 'raiseAlerts',        label: 'Raise alerts' },
+  { key: 'payments',           label: 'Payments' },
+  { key: 'helperAvailability', label: 'Helper availability' },
+  { key: 'newRegistrations',   label: 'New registrations' },
+  { key: 'locationChanges',    label: 'Location changes' },
+  { key: 'withdrawals',        label: 'Withdrawals' },
+  { key: 'notifications',      label: 'Notifications' },
+];
+
+function renderRestrictions() {
+  const container = document.getElementById('page-service-control');
+  if (!container || !document.getElementById('restriction-stats')) return;
+
+  const active = restrictions.filter(r => r.status === 'active');
+  const ended = restrictions.filter(r => r.status !== 'active');
+
+  // Compute affected counts
+  const affectedDistricts = new Set();
+  active.forEach(r => (r.districts || []).forEach(d => affectedDistricts.add(d)));
+  let affectedUsers = 0, affectedHelpers = 0;
+  active.forEach(r => {
+    affectedUsers += users.filter(u => (r.districts || []).includes(u.district)).length;
+    affectedHelpers += helpers.filter(h => (r.districts || []).includes(h.district)).length;
+  });
+
+  document.getElementById('restriction-stats').innerHTML = [
+    { label: 'Active Restrictions',  val: active.length,            icon: '🚧', bg: 'danger' },
+    { label: 'Affected Districts',   val: affectedDistricts.size,   icon: '🗺️', bg: 'warning' },
+    { label: 'Affected Users',       val: affectedUsers,            icon: '👥', bg: 'info' },
+    { label: 'Affected Helpers',     val: affectedHelpers,          icon: '🛡️', bg: 'purple' },
+  ].map(s => `
+    <div class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-label">${s.label}</div>
+        <div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div>
+      </div>
+      <div class="stat-value">${s.val}</div>
+    </div>
+  `).join('');
+
+  document.getElementById('restrictions-active-table').innerHTML = active.length === 0 ?
+    empty('✅', 'All systems normal', 'No restrictions are currently active') :
+    `<table class="table"><thead><tr>
+      <th>Title</th><th>Severity</th><th>Area</th><th>Disabled</th><th>Until</th><th>Created By</th><th>Actions</th>
+    </tr></thead><tbody>` + active.map(r => {
+      const sevClass = r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info';
+      const disabled = Object.entries(r.features || {}).filter(([k, v]) => v === false).map(([k]) => k);
+      const isLockdown = (r.features || {}).fullLockdown === false;
+      return `<tr>
+        <td><strong>${r.title || '—'}</strong><br><span class="user-meta">${(r.reason || '').substring(0, 60)}</span></td>
+        <td><span class="badge badge-${sevClass}">${(r.severity || 'info').toUpperCase()}</span></td>
+        <td>${(r.districts || []).slice(0, 2).join(', ')}${(r.districts || []).length > 2 ? `+${(r.districts || []).length - 2}` : ''}</td>
+        <td>${isLockdown ? '<span class="badge badge-danger">🔒 Full Lockdown</span>' : `${disabled.length} features`}</td>
+        <td>${r.endsAt ? fDate(r.endsAt) : '<i style="color:var(--text-mute)">Until resumed</i>'}</td>
+        <td>${r.createdBy || '—'}<br><span class="user-meta">${fDate(r.createdAt)}</span></td>
+        <td>
+          <button class="btn btn-success btn-sm" onclick="resumeRestriction('${r.id}')">▶️ Resume</button>
+          <button class="btn btn-ghost btn-sm" onclick="viewRestriction('${r.id}')">👁 View</button>
+        </td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+
+  document.getElementById('restrictions-history-table').innerHTML = ended.length === 0 ?
+    empty('📜', 'No history', 'Past restrictions will appear here') :
+    `<table class="table"><thead><tr>
+      <th>Title</th><th>Severity</th><th>Area</th><th>Status</th><th>Created</th><th>Ended</th><th>Actions</th>
+    </tr></thead><tbody>` + ended.map(r => {
+      const sevClass = r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info';
+      return `<tr>
+        <td>${r.title || '—'}</td>
+        <td><span class="badge badge-${sevClass}">${(r.severity || 'info').toUpperCase()}</span></td>
+        <td>${(r.districts || []).slice(0, 2).join(', ')}</td>
+        <td><span class="badge badge-gray">${r.status || 'ended'}</span></td>
+        <td>${fDate(r.createdAt)}</td>
+        <td>${fDate(r.resumedAt || r.endedAt)}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="viewRestriction('${r.id}')">👁 View</button></td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+}
+
+function openCreateRestrictionModal() {
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">🚧 Create Service Restriction</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+
+      <div style="background:var(--warning-light);padding:12px;border-radius:8px;margin-bottom:16px;border-left:3px solid var(--warning)">
+        <div style="font-size:12px;color:var(--warning);font-weight:700">⚠️ This will pause services for users in selected areas immediately.</div>
+      </div>
+
+      <div class="modal-section-header">📋 Basic Info</div>
+      <div class="modal-field">
+        <div class="modal-label">Reason Title *</div>
+        <input type="text" id="rs-title" class="form-input" placeholder="e.g. Curfew in Hyderabad due to safety concerns" maxlength="100"/>
+      </div>
+      <div class="modal-field">
+        <div class="modal-label">Detailed Explanation *</div>
+        <textarea id="rs-reason" class="form-textarea" placeholder="Explain the situation users will see..." maxlength="500"></textarea>
+      </div>
+      <div class="modal-field">
+        <div class="modal-label">Severity *</div>
+        <select id="rs-severity" class="form-select">
+          <option value="info">ℹ️ Info — Notice only</option>
+          <option value="warning" selected>⚠️ Warning — Some features disabled</option>
+          <option value="critical">🚨 Critical — Major restrictions</option>
+        </select>
+      </div>
+
+      <div class="modal-section-header">🗺️ Affected Districts</div>
+      <div class="modal-field">
+        <div class="modal-label">Select districts (one or more)</div>
+        <div id="rs-districts" style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border);border-radius:8px;padding:10px;background:var(--bg-alt)">
+          ${TELANGANA_DISTRICT_LIST.map(d => `
+            <label style="display:flex;align-items:center;gap:8px;padding:6px;cursor:pointer;font-size:13px">
+              <input type="checkbox" class="checkbox rs-district-cb" value="${d}"/> ${d}
+            </label>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="modal-section-header">⏰ Duration</div>
+      <div class="modal-field">
+        <div class="modal-label">End Time (Optional)</div>
+        <input type="datetime-local" id="rs-end-time" class="form-input"/>
+        <div style="font-size:11px;color:var(--text-mute);margin-top:4px">Leave blank to keep until manually resumed</div>
+      </div>
+
+      <div class="modal-section-header">🔧 Feature Controls</div>
+      <div class="modal-field">
+        <label style="display:flex;align-items:center;gap:8px;background:var(--danger-light);padding:12px;border-radius:8px;cursor:pointer;border:2px solid var(--danger)">
+          <input type="checkbox" class="checkbox" id="rs-lockdown"/>
+          <div style="flex:1">
+            <div style="font-weight:800;color:var(--danger)">🔒 Full Lockdown</div>
+            <div style="font-size:12px;color:var(--text-sec)">Disable ALL features (overrides individual toggles below)</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="modal-field">
+        <div class="modal-label">Or selectively disable features:</div>
+        <div id="rs-features" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px">
+          ${FEATURE_KEYS.map(f => `
+            <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1.5px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;background:var(--surface)">
+              <input type="checkbox" class="checkbox rs-feature-cb" data-feature="${f.key}"/>
+              <span>Disable ${f.label}</span>
+            </label>
+          `).join('')}
+        </div>
+        <div style="font-size:11px;color:var(--text-mute);margin-top:6px">✓ Checked = feature will be disabled in selected areas</div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="submitRestriction()">🚧 Activate Restriction</button>
+    </div>`
+  );
+}
+
+function submitRestriction() {
+  const title = document.getElementById('rs-title').value.trim();
+  const reason = document.getElementById('rs-reason').value.trim();
+  const severity = document.getElementById('rs-severity').value;
+  const endTimeRaw = document.getElementById('rs-end-time').value;
+  const isLockdown = document.getElementById('rs-lockdown').checked;
+  const districts = Array.from(document.querySelectorAll('.rs-district-cb:checked')).map(cb => cb.value);
+
+  if (!title || title.length < 5) { showToast('Title required (min 5 chars)', 'error'); return; }
+  if (!reason || reason.length < 10) { showToast('Detailed reason required (min 10 chars)', 'error'); return; }
+  if (districts.length === 0) { showToast('Select at least one district', 'error'); return; }
+
+  // Build features map: every feature is true by default; checked = disabled (false)
+  const features = {};
+  FEATURE_KEYS.forEach(f => {
+    const cb = document.querySelector(`.rs-feature-cb[data-feature="${f.key}"]`);
+    features[f.key] = !cb.checked;  // checked means "disable", so feature = false
+  });
+  features.fullLockdown = !isLockdown;  // checked means lockdown active, so fullLockdown flag = false (disabled)
+
+  if (!confirm(`Activate restriction in ${districts.length} district(s)? Users will be notified immediately.`)) return;
+
+  const payload = {
+    title, reason, severity,
+    scope: 'district',
+    districts,
+    features,
+    status: 'active',
+    startsAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: currentAdmin.email || 'Admin',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  };
+
+  if (endTimeRaw) {
+    payload.endsAt = firebase.firestore.Timestamp.fromDate(new Date(endTimeRaw));
+  }
+
+  db.collection('serviceRestrictions').add(payload).then(ref => {
+    logAudit('Activate service restriction', `${title} — ${districts.join(', ')}`);
+
+    // Notify all users + helpers in those districts
+    Promise.all(districts.map(district => {
+      return Promise.all([
+        db.collection('users').where('district', '==', district).get().then(snap => {
+          return Promise.all(snap.docs.map(d => db.collection('notifications').add({
+            userId: d.id,
+            type: 'service_restriction',
+            title: '🚧 Service Restriction Active',
+            body: `${title}: ${reason.substring(0, 100)}`,
+            data: { restrictionId: ref.id },
+            read: false,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          })));
+        }),
+        db.collection('helpers').where('district', '==', district).get().then(snap => {
+          return Promise.all(snap.docs.map(d => db.collection('notifications').add({
+            userId: d.id,
+            type: 'service_restriction',
+            title: '🚧 Service Restriction Active',
+            body: `${title}: ${reason.substring(0, 100)}`,
+            data: { restrictionId: ref.id },
+            read: false,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          })));
+        }),
+      ]);
+    })).catch(e => console.log('Notify error:', e));
+
+    showToast('✅ Restriction activated. Affected users notified.', 'success');
+    closeModal();
+    loadRestrictions().then(renderRestrictions);
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+function resumeRestriction(id) {
+  const r = restrictions.find(x => x.id === id);
+  if (!r) return;
+  if (!confirm(`Resume services in ${(r.districts || []).join(', ')}?`)) return;
+
+  db.collection('serviceRestrictions').doc(id).update({
+    status: 'resumed',
+    resumedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    resumedBy: currentAdmin.email || 'Admin',
+  }).then(() => {
+    logAudit('Resume service restriction', `${r.title} — ${(r.districts || []).join(', ')}`);
+
+    // Notify users that services are restored
+    (r.districts || []).forEach(district => {
+      db.collection('users').where('district', '==', district).get().then(snap => {
+        snap.docs.forEach(d => db.collection('notifications').add({
+          userId: d.id,
+          type: 'service_resumed',
+          title: '✅ Services Restored',
+          body: `Services in ${district} have been restored. Thank you for your patience.`,
+          data: { restrictionId: id },
+          read: false,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }));
+      });
+      db.collection('helpers').where('district', '==', district).get().then(snap => {
+        snap.docs.forEach(d => db.collection('notifications').add({
+          userId: d.id,
+          type: 'service_resumed',
+          title: '✅ Services Restored',
+          body: `Services in ${district} have been restored. Thank you for your patience.`,
+          data: { restrictionId: id },
+          read: false,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }));
+      });
+    });
+
+    showToast('✅ Services resumed. Users notified.', 'success');
+    loadRestrictions().then(renderRestrictions);
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+function viewRestriction(id) {
+  const r = restrictions.find(x => x.id === id);
+  if (!r) return;
+
+  const features = r.features || {};
+  const featureRows = FEATURE_KEYS.map(f => `
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light);font-size:13px">
+      <span>${f.label}</span>
+      <span style="font-weight:700;color:${features[f.key] === false ? 'var(--danger)' : 'var(--success)'}">
+        ${features[f.key] === false ? '🚫 Disabled' : '✅ Enabled'}
+      </span>
+    </div>
+  `).join('');
+
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">🚧 ${r.title || 'Restriction'}</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      ${mf('Severity', `<span class="badge badge-${r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info'}">${(r.severity || 'info').toUpperCase()}</span>`)}
+      ${mf('Status', `<span class="badge badge-${r.status === 'active' ? 'danger' : 'gray'}">${r.status || 'unknown'}</span>`)}
+      ${mf('Districts', (r.districts || []).join(', ') || '—')}
+      ${mf('Reason', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px">${r.reason || '—'}</div>`)}
+      ${mf('Started', fDate(r.createdAt))}
+      ${mf('Ends', r.endsAt ? fDate(r.endsAt) : '<i>Until manually resumed</i>')}
+      ${r.resumedAt ? mf('Resumed', `${fDate(r.resumedAt)} by ${r.resumedBy || 'Admin'}`) : ''}
+      ${mf('Created By', r.createdBy || 'Admin')}
+
+      ${features.fullLockdown === false ?
+        '<div style="background:var(--danger-light);padding:12px;border-radius:8px;margin:12px 0;border-left:3px solid var(--danger);font-weight:700;color:var(--danger)">🔒 FULL LOCKDOWN — All features disabled</div>'
+        : ''}
+
+      <div class="modal-section-header">🔧 Feature Status</div>
+      <div>${featureRows}</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      ${r.status === 'active' ? `<button class="btn btn-success" onclick="resumeRestriction('${r.id}');closeModal()">▶️ Resume Now</button>` : ''}
+    </div>`
+  );
 }
 
 function decideAppeal(id, decision) {
