@@ -354,7 +354,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
 
     <div class="nav-section">System</div>
     <div class="nav-item" data-page="notifications"><span class="nav-icon">🔔</span>Broadcasts</div>
-    <div class="nav-item" data-page="service-control"><span class="nav-icon">🚧</span>Service Control <span class="nav-badge" id="badge-service-control" style="display:none">0</span></div>
+    <div class="nav-item" data-page="service-control"><span class="nav-icon">🌍</span>Region Operations <span class="nav-badge" id="badge-service-control" style="display:none">0</span></div>
     <div class="nav-item" data-page="audit"><span class="nav-icon">📜</span>Audit Logs</div>
 
     <div class="sidebar-footer">
@@ -653,21 +653,32 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         </div>
       </div>
 
-      <!-- SERVICE CONTROL -->
+      <!-- REGION OPERATIONS CENTER -->
       <div class="page" id="page-service-control">
         <div class="page-head">
           <div>
-            <div class="page-title">🚧 Regional Service Control</div>
-            <div class="page-sub">Pause services in selected regions during emergencies</div>
+            <div class="page-title">🌍 Region Operations Center</div>
+            <div class="page-sub">Pan-India operations & service restrictions</div>
           </div>
-          <button class="btn btn-danger" onclick="openCreateRestrictionModal()">+ Create Restriction</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-success" onclick="openEnableRegionModal()">+ Enable Region</button>
+            <button class="btn btn-danger" onclick="openCreateRestrictionModal()">+ Restrict Region</button>
+          </div>
         </div>
 
         <div class="stats-grid" id="restriction-stats"></div>
 
         <div class="card">
           <div class="card-head">
-            <div class="card-title">Active Restrictions</div>
+            <div class="card-title">📍 Enabled Regions</div>
+            <div class="card-sub">States and districts where Connect is operational</div>
+          </div>
+          <div class="table-wrap" id="enabled-regions-table"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">🚧 Active Restrictions</div>
             <div class="card-sub">Currently in effect</div>
           </div>
           <div class="table-wrap" id="restrictions-active-table"></div>
@@ -675,7 +686,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
 
         <div class="card">
           <div class="card-head">
-            <div class="card-title">History</div>
+            <div class="card-title">📜 Restriction History</div>
             <div class="card-sub">Past restrictions</div>
           </div>
           <div class="table-wrap" id="restrictions-history-table"></div>
@@ -709,7 +720,7 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 
 // ── State ──
-let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[];
+let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[];
 let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
 let userSearchText='', helperSearchText='', userDistrict='', helperDistrict='';
 let selectedUsers=new Set(), selectedHelpers=new Set();
@@ -790,7 +801,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'regions') renderRegions();
     if (page === 'moderation') renderModeration();
     if (page === 'audit') loadAuditLogs();
-    if (page === 'service-control') renderRestrictions();
+    if (page === 'service-control') {
+      Promise.all([loadRestrictions(), loadEnabledRegions()]).then(renderRestrictions);
+    }
   });
 });
 
@@ -879,7 +892,7 @@ document.getElementById('modal').addEventListener('click', e => {
 
 // ── Load All Data ──
 function loadAll() {
-  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements(), loadRestrictions()])
+  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements(), loadRestrictions(), loadEnabledRegions()])
     .then(() => {
       updateOverview();
       renderUsers();
@@ -949,6 +962,11 @@ function loadRestrictions() {
       .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
     setBadge('badge-service-control', restrictions.filter(r => r.status === 'active').length);
   }).catch(e => { console.log('Load restrictions error:', e); restrictions = []; });
+}
+function loadEnabledRegions() {
+  return db.collection('enabledRegions').get().then(snap => {
+    enabledRegions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }).catch(e => { console.log('Load enabledRegions error:', e); enabledRegions = []; });
 }
 function loadAuditLogs() {
   db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).get().then(snap => {
@@ -2192,43 +2210,92 @@ function resolveAgreementDispute(id) {
   });
 }
 
-// ── Service Control ──
-const TELANGANA_DISTRICT_LIST = ['Adilabad','Bhadradri Kothagudem','Hanamkonda','Hyderabad','Jagtial','Jangaon','Jayashankar Bhupalpally','Jogulamba Gadwal','Kamareddy','Karimnagar','Khammam','Kumuram Bheem Asifabad','Mahabubabad','Mahabubnagar','Mancherial','Medak','Medchal–Malkajgiri','Mulugu','Nagarkurnool','Nalgonda','Narayanpet','Nirmal','Nizamabad','Peddapalli','Rajanna Sircilla','Rangareddy','Sangareddy','Siddipet','Suryapet','Vikarabad','Wanaparthy','Warangal','Yadadri Bhuvanagiri'];
+// ── Region Operations Center ──
+
+// Full India geo database (states + major cities)
+const INDIA_STATES = [
+  { name: 'Andhra Pradesh', cities: ['Visakhapatnam','Vijayawada','Guntur','Tirupati','Nellore','Kurnool','Rajahmundry','Kadapa','Anantapur'] },
+  { name: 'Arunachal Pradesh', cities: ['Itanagar','Naharlagun','Pasighat','Tezpur'] },
+  { name: 'Assam', cities: ['Guwahati','Dibrugarh','Silchar','Jorhat','Tezpur'] },
+  { name: 'Bihar', cities: ['Patna','Gaya','Bhagalpur','Muzaffarpur','Darbhanga'] },
+  { name: 'Chhattisgarh', cities: ['Raipur','Bhilai','Bilaspur','Korba'] },
+  { name: 'Goa', cities: ['Panaji','Margao','Vasco da Gama','Mapusa'] },
+  { name: 'Gujarat', cities: ['Ahmedabad','Surat','Vadodara','Rajkot','Bhavnagar','Gandhinagar','Jamnagar'] },
+  { name: 'Haryana', cities: ['Gurugram','Faridabad','Panipat','Ambala','Karnal','Hisar','Rohtak'] },
+  { name: 'Himachal Pradesh', cities: ['Shimla','Manali','Dharamshala','Mandi'] },
+  { name: 'Jharkhand', cities: ['Ranchi','Jamshedpur','Dhanbad','Bokaro'] },
+  { name: 'Karnataka', cities: ['Bengaluru','Mysuru','Hubballi','Mangaluru','Belagavi','Davangere','Ballari','Tumakuru'] },
+  { name: 'Kerala', cities: ['Thiruvananthapuram','Kochi','Kozhikode','Thrissur','Kollam','Kannur'] },
+  { name: 'Madhya Pradesh', cities: ['Bhopal','Indore','Jabalpur','Gwalior','Ujjain','Sagar'] },
+  { name: 'Maharashtra', cities: ['Mumbai','Pune','Nagpur','Nashik','Aurangabad','Solapur','Thane','Kolhapur'] },
+  { name: 'Manipur', cities: ['Imphal','Bishnupur','Thoubal'] },
+  { name: 'Meghalaya', cities: ['Shillong','Tura','Jowai'] },
+  { name: 'Mizoram', cities: ['Aizawl','Lunglei','Champhai'] },
+  { name: 'Nagaland', cities: ['Kohima','Dimapur','Mokokchung'] },
+  { name: 'Odisha', cities: ['Bhubaneswar','Cuttack','Rourkela','Berhampur','Sambalpur'] },
+  { name: 'Punjab', cities: ['Ludhiana','Amritsar','Jalandhar','Patiala','Mohali','Bathinda'] },
+  { name: 'Rajasthan', cities: ['Jaipur','Jodhpur','Udaipur','Kota','Ajmer','Bikaner'] },
+  { name: 'Sikkim', cities: ['Gangtok','Namchi','Geyzing'] },
+  { name: 'Tamil Nadu', cities: ['Chennai','Coimbatore','Madurai','Tiruchirappalli','Salem','Tirunelveli','Vellore','Erode'] },
+  { name: 'Telangana', cities: ['Hyderabad','Warangal','Nizamabad','Karimnagar','Khammam','Hanamkonda','Mahabubnagar','Adilabad','Suryapet'] },
+  { name: 'Tripura', cities: ['Agartala','Udaipur','Dharmanagar'] },
+  { name: 'Uttar Pradesh', cities: ['Lucknow','Kanpur','Ghaziabad','Agra','Varanasi','Meerut','Allahabad','Bareilly','Aligarh','Noida'] },
+  { name: 'Uttarakhand', cities: ['Dehradun','Haridwar','Roorkee','Haldwani','Rishikesh'] },
+  { name: 'West Bengal', cities: ['Kolkata','Howrah','Durgapur','Asansol','Siliguri'] },
+  { name: 'Delhi', cities: ['New Delhi','Delhi','Dwarka','Saket','Karol Bagh'] },
+  { name: 'Jammu and Kashmir', cities: ['Srinagar','Jammu','Anantnag','Baramulla'] },
+  { name: 'Ladakh', cities: ['Leh','Kargil'] },
+  { name: 'Chandigarh', cities: ['Chandigarh'] },
+  { name: 'Puducherry', cities: ['Puducherry','Karaikal'] },
+  { name: 'Andaman and Nicobar Islands', cities: ['Port Blair'] },
+  { name: 'Dadra and Nagar Haveli and Daman and Diu', cities: ['Daman','Diu','Silvassa'] },
+  { name: 'Lakshadweep', cities: ['Kavaratti'] },
+];
+
+const REGION_STATUS_LABELS = {
+  active: { label: 'Active', emoji: '✅', color: 'success' },
+  pilot: { label: 'Pilot', emoji: '🧪', color: 'info' },
+  coming_soon: { label: 'Coming Soon', emoji: '🔜', color: 'warning' },
+  maintenance: { label: 'Maintenance', emoji: '🔧', color: 'warning' },
+  disabled: { label: 'Disabled', emoji: '🚫', color: 'gray' },
+};
 
 const FEATURE_KEYS = [
-  { key: 'newRequests',        label: 'New requests / bookings' },
+  { key: 'search',             label: 'Search' },
+  { key: 'registrations',      label: 'Registrations' },
+  { key: 'newRequests',        label: 'New requests' },
   { key: 'chat',               label: 'Chat' },
   { key: 'calls',              label: 'Calls' },
   { key: 'raiseAlerts',        label: 'Raise alerts' },
   { key: 'payments',           label: 'Payments' },
   { key: 'helperAvailability', label: 'Helper availability' },
-  { key: 'newRegistrations',   label: 'New registrations' },
-  { key: 'locationChanges',    label: 'Location changes' },
   { key: 'withdrawals',        label: 'Withdrawals' },
+  { key: 'locationChanges',    label: 'Location changes' },
   { key: 'notifications',      label: 'Notifications' },
 ];
 
 function renderRestrictions() {
-  const container = document.getElementById('page-service-control');
-  if (!container || !document.getElementById('restriction-stats')) return;
+  if (!document.getElementById('restriction-stats')) return;
 
   const active = restrictions.filter(r => r.status === 'active');
   const ended = restrictions.filter(r => r.status !== 'active');
 
-  // Compute affected counts
+  // Stats — affected counts
   const affectedDistricts = new Set();
   active.forEach(r => (r.districts || []).forEach(d => affectedDistricts.add(d)));
   let affectedUsers = 0, affectedHelpers = 0;
   active.forEach(r => {
-    affectedUsers += users.filter(u => (r.districts || []).includes(u.district)).length;
-    affectedHelpers += helpers.filter(h => (r.districts || []).includes(h.district)).length;
+    const aud = r.audience || 'both';
+    const matchUser = u => (r.districts || []).includes(u.district) || (r.states || []).includes(u.state);
+    if (aud === 'users' || aud === 'both') affectedUsers += users.filter(matchUser).length;
+    if (aud === 'helpers' || aud === 'both') affectedHelpers += helpers.filter(matchUser).length;
   });
 
   document.getElementById('restriction-stats').innerHTML = [
-    { label: 'Active Restrictions',  val: active.length,            icon: '🚧', bg: 'danger' },
-    { label: 'Affected Districts',   val: affectedDistricts.size,   icon: '🗺️', bg: 'warning' },
-    { label: 'Affected Users',       val: affectedUsers,            icon: '👥', bg: 'info' },
-    { label: 'Affected Helpers',     val: affectedHelpers,          icon: '🛡️', bg: 'purple' },
+    { label: 'Enabled Regions',  val: enabledRegions.length + 1, icon: '🌍', bg: 'success' },
+    { label: 'Active Restrictions', val: active.length,           icon: '🚧', bg: 'danger' },
+    { label: 'Affected Users',     val: affectedUsers,            icon: '👥', bg: 'info' },
+    { label: 'Affected Helpers',   val: affectedHelpers,          icon: '🛡️', bg: 'purple' },
   ].map(s => `
     <div class="stat-card">
       <div class="stat-card-head">
@@ -2239,21 +2306,52 @@ function renderRestrictions() {
     </div>
   `).join('');
 
+  // Enabled regions table — Telangana auto-row + admin-managed regions
+  const allRegions = [
+    { id: '__telangana__', state: 'Telangana', district: '', status: 'active', enabledBy: 'System (default)', autoEnabled: true },
+    ...enabledRegions,
+  ];
+  document.getElementById('enabled-regions-table').innerHTML = `
+    <table class="table"><thead><tr>
+      <th>State</th><th>District / City</th><th>Status</th><th>Enabled By</th><th>When</th><th>Actions</th>
+    </tr></thead><tbody>` + allRegions.map(r => {
+      const cfg = REGION_STATUS_LABELS[r.status] || REGION_STATUS_LABELS.disabled;
+      return `<tr>
+        <td><strong>${r.state || '—'}</strong></td>
+        <td>${r.district || r.city || '<i style="color:var(--text-mute)">Entire state</i>'}</td>
+        <td><span class="badge badge-${cfg.color}">${cfg.emoji} ${cfg.label}</span></td>
+        <td>${r.enabledBy || 'Admin'}</td>
+        <td>${r.autoEnabled ? '<i style="color:var(--text-mute)">Built-in</i>' : fDate(r.enabledAt)}</td>
+        <td>
+          ${r.autoEnabled
+            ? '<span style="font-size:11px;color:var(--text-mute)">Cannot disable default region</span>'
+            : `<button class="btn btn-ghost btn-sm" onclick="changeRegionStatus('${r.id}')">Change Status</button>
+               <button class="btn btn-danger btn-sm" onclick="removeEnabledRegion('${r.id}')">🗑️ Remove</button>`}
+        </td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+
+  // Active restrictions
   document.getElementById('restrictions-active-table').innerHTML = active.length === 0 ?
     empty('✅', 'All systems normal', 'No restrictions are currently active') :
     `<table class="table"><thead><tr>
-      <th>Title</th><th>Severity</th><th>Area</th><th>Disabled</th><th>Until</th><th>Created By</th><th>Actions</th>
+      <th>Title</th><th>Severity</th><th>Area</th><th>Audience</th><th>Disabled</th><th>Until</th><th>Actions</th>
     </tr></thead><tbody>` + active.map(r => {
       const sevClass = r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info';
       const disabled = Object.entries(r.features || {}).filter(([k, v]) => v === false).map(([k]) => k);
       const isLockdown = (r.features || {}).fullLockdown === false;
+      const aud = r.audience || 'both';
+      const audLabel = aud === 'users' ? '👥 Users' : aud === 'helpers' ? '🛡️ Helpers' : '👥+🛡️ Both';
+      const areaParts = [];
+      if (r.districts?.length) areaParts.push(...r.districts.slice(0, 2));
+      else if (r.states?.length) areaParts.push(...r.states.slice(0, 2));
       return `<tr>
         <td><strong>${r.title || '—'}</strong><br><span class="user-meta">${(r.reason || '').substring(0, 60)}</span></td>
         <td><span class="badge badge-${sevClass}">${(r.severity || 'info').toUpperCase()}</span></td>
-        <td>${(r.districts || []).slice(0, 2).join(', ')}${(r.districts || []).length > 2 ? `+${(r.districts || []).length - 2}` : ''}</td>
-        <td>${isLockdown ? '<span class="badge badge-danger">🔒 Full Lockdown</span>' : `${disabled.length} features`}</td>
+        <td>${areaParts.join(', ') || '—'}</td>
+        <td><span class="badge badge-info">${audLabel}</span></td>
+        <td>${isLockdown ? '<span class="badge badge-danger">🔒 Lockdown</span>' : `${disabled.length} features`}</td>
         <td>${r.endsAt ? fDate(r.endsAt) : '<i style="color:var(--text-mute)">Until resumed</i>'}</td>
-        <td>${r.createdBy || '—'}<br><span class="user-meta">${fDate(r.createdAt)}</span></td>
         <td>
           <button class="btn btn-success btn-sm" onclick="resumeRestriction('${r.id}')">▶️ Resume</button>
           <button class="btn btn-ghost btn-sm" onclick="viewRestriction('${r.id}')">👁 View</button>
@@ -2261,16 +2359,18 @@ function renderRestrictions() {
       </tr>`;
     }).join('') + `</tbody></table>`;
 
+  // History
   document.getElementById('restrictions-history-table').innerHTML = ended.length === 0 ?
     empty('📜', 'No history', 'Past restrictions will appear here') :
     `<table class="table"><thead><tr>
       <th>Title</th><th>Severity</th><th>Area</th><th>Status</th><th>Created</th><th>Ended</th><th>Actions</th>
     </tr></thead><tbody>` + ended.map(r => {
       const sevClass = r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info';
+      const areaParts = (r.districts && r.districts.length) ? r.districts.slice(0, 2) : (r.states && r.states.length ? r.states.slice(0, 2) : []);
       return `<tr>
         <td>${r.title || '—'}</td>
         <td><span class="badge badge-${sevClass}">${(r.severity || 'info').toUpperCase()}</span></td>
-        <td>${(r.districts || []).slice(0, 2).join(', ')}</td>
+        <td>${areaParts.join(', ') || '—'}</td>
         <td><span class="badge badge-gray">${r.status || 'ended'}</span></td>
         <td>${fDate(r.createdAt)}</td>
         <td>${fDate(r.resumedAt || r.endedAt)}</td>
@@ -2279,7 +2379,148 @@ function renderRestrictions() {
     }).join('') + `</tbody></table>`;
 }
 
+// ── ENABLE REGION ──
+function openEnableRegionModal() {
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">🌍 Enable a New Region</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+
+      <div style="background:var(--success-light);padding:12px;border-radius:8px;margin-bottom:16px;border-left:3px solid var(--success)">
+        <div style="font-size:12px;color:var(--success);font-weight:700">✅ Enabling a region makes Connect operational there. Users and helpers can register and use all services.</div>
+      </div>
+
+      <div class="modal-field">
+        <div class="modal-label">State *</div>
+        <select id="er-state" class="form-select" onchange="updateCityList()">
+          <option value="">Select a state...</option>
+          ${INDIA_STATES.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="modal-field">
+        <div class="modal-label">District / City (Optional)</div>
+        <select id="er-district" class="form-select">
+          <option value="">Entire state (recommended)</option>
+        </select>
+        <div style="font-size:11px;color:var(--text-mute);margin-top:4px">Leave blank to enable the whole state</div>
+      </div>
+
+      <div class="modal-field">
+        <div class="modal-label">Initial Status *</div>
+        <select id="er-status" class="form-select">
+          <option value="active">✅ Active — full operations</option>
+          <option value="pilot">🧪 Pilot — limited launch</option>
+          <option value="coming_soon">🔜 Coming Soon — preview only</option>
+          <option value="maintenance">🔧 Maintenance — temporary pause</option>
+        </select>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-success" onclick="submitEnableRegion()">🌍 Enable Region</button>
+    </div>`
+  );
+}
+
+function updateCityList() {
+  const stateName = document.getElementById('er-state').value;
+  const district = document.getElementById('er-district');
+  const state = INDIA_STATES.find(s => s.name === stateName);
+  if (!state) { district.innerHTML = '<option value="">Entire state</option>'; return; }
+  district.innerHTML = '<option value="">Entire state (recommended)</option>' +
+    state.cities.map(c => `<option value="${c}">${c}</option>`).join('');
+}
+
+function submitEnableRegion() {
+  const state = document.getElementById('er-state').value;
+  const district = document.getElementById('er-district').value;
+  const status = document.getElementById('er-status').value;
+
+  if (!state) { showToast('Select a state', 'error'); return; }
+
+  // Check duplicate
+  const existing = enabledRegions.find(r =>
+    r.state?.toLowerCase() === state.toLowerCase() &&
+    (r.district || '').toLowerCase() === (district || '').toLowerCase()
+  );
+  if (existing) { showToast('This region is already enabled', 'error'); return; }
+
+  const payload = {
+    state, district, status,
+    enabledBy: currentAdmin.email || 'Admin',
+    enabledAt: firebase.firestore.FieldValue.serverTimestamp(),
+  };
+
+  db.collection('enabledRegions').add(payload).then(() => {
+    logAudit('Enable region', `${state}${district ? ' / ' + district : ''} (${status})`);
+    showToast('✅ Region enabled. Users can now register there.', 'success');
+    closeModal();
+    loadEnabledRegions().then(renderRestrictions);
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+function changeRegionStatus(id) {
+  const r = enabledRegions.find(x => x.id === id); if (!r) return;
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">Change Status: ${r.state}${r.district ? ' / ' + r.district : ''}</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <div class="modal-label">New Status</div>
+        <select id="cs-status" class="form-select">
+          <option value="active" ${r.status === 'active' ? 'selected' : ''}>✅ Active</option>
+          <option value="pilot" ${r.status === 'pilot' ? 'selected' : ''}>🧪 Pilot</option>
+          <option value="coming_soon" ${r.status === 'coming_soon' ? 'selected' : ''}>🔜 Coming Soon</option>
+          <option value="maintenance" ${r.status === 'maintenance' ? 'selected' : ''}>🔧 Maintenance</option>
+          <option value="disabled" ${r.status === 'disabled' ? 'selected' : ''}>🚫 Disabled</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitChangeRegionStatus('${id}')">Update</button>
+    </div>`
+  );
+}
+
+function submitChangeRegionStatus(id) {
+  const newStatus = document.getElementById('cs-status').value;
+  db.collection('enabledRegions').doc(id).update({
+    status: newStatus,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: currentAdmin.email || 'Admin',
+  }).then(() => {
+    const r = enabledRegions.find(x => x.id === id);
+    logAudit('Update region status', `${r?.state}${r?.district ? ' / ' + r.district : ''} → ${newStatus}`);
+    showToast('✅ Status updated', 'success');
+    closeModal();
+    loadEnabledRegions().then(renderRestrictions);
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+function removeEnabledRegion(id) {
+  const r = enabledRegions.find(x => x.id === id); if (!r) return;
+  if (!confirm(`Remove ${r.state}${r.district ? ' / ' + r.district : ''}?\n\nUsers in this region will lose access. They'll see "We're not there yet" if they try to register.`)) return;
+
+  db.collection('enabledRegions').doc(id).delete().then(() => {
+    logAudit('Remove enabled region', `${r.state}${r.district ? ' / ' + r.district : ''}`);
+    showToast('Region removed', 'success');
+    loadEnabledRegions().then(renderRestrictions);
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// ── CREATE RESTRICTION (with audience targeting) ──
 function openCreateRestrictionModal() {
+  // Build state list — include Telangana + admin-enabled regions
+  const enabledStateNames = new Set(['Telangana', ...enabledRegions.map(r => r.state)]);
+  const availableStates = INDIA_STATES.filter(s => enabledStateNames.has(s.name));
+
   showModal(
     `<div class="modal-header">
       <div class="modal-title">🚧 Create Service Restriction</div>
@@ -2288,13 +2529,13 @@ function openCreateRestrictionModal() {
     <div class="modal-body">
 
       <div style="background:var(--warning-light);padding:12px;border-radius:8px;margin-bottom:16px;border-left:3px solid var(--warning)">
-        <div style="font-size:12px;color:var(--warning);font-weight:700">⚠️ This will pause services for users in selected areas immediately.</div>
+        <div style="font-size:12px;color:var(--warning);font-weight:700">⚠️ This will pause services for the selected audience in the selected areas immediately.</div>
       </div>
 
       <div class="modal-section-header">📋 Basic Info</div>
       <div class="modal-field">
         <div class="modal-label">Reason Title *</div>
-        <input type="text" id="rs-title" class="form-input" placeholder="e.g. Curfew in Hyderabad due to safety concerns" maxlength="100"/>
+        <input type="text" id="rs-title" class="form-input" placeholder="e.g. Curfew in Hyderabad" maxlength="100"/>
       </div>
       <div class="modal-field">
         <div class="modal-label">Detailed Explanation *</div>
@@ -2309,15 +2550,30 @@ function openCreateRestrictionModal() {
         </select>
       </div>
 
-      <div class="modal-section-header">🗺️ Affected Districts</div>
+      <div class="modal-section-header">👥 Audience</div>
       <div class="modal-field">
-        <div class="modal-label">Select districts (one or more)</div>
-        <div id="rs-districts" style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border);border-radius:8px;padding:10px;background:var(--bg-alt)">
-          ${TELANGANA_DISTRICT_LIST.map(d => `
-            <label style="display:flex;align-items:center;gap:8px;padding:6px;cursor:pointer;font-size:13px">
-              <input type="checkbox" class="checkbox rs-district-cb" value="${d}"/> ${d}
-            </label>
-          `).join('')}
+        <div class="modal-label">Who is affected? *</div>
+        <select id="rs-audience" class="form-select">
+          <option value="both">👥+🛡️ Both Users & Helpers</option>
+          <option value="users">👥 Users only</option>
+          <option value="helpers">🛡️ Helpers only</option>
+        </select>
+      </div>
+
+      <div class="modal-section-header">🗺️ Affected Region</div>
+      <div class="modal-field">
+        <div class="modal-label">State *</div>
+        <select id="rs-state" class="form-select" onchange="rsUpdateDistricts()">
+          <option value="">Select state...</option>
+          ${availableStates.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}
+        </select>
+        <div style="font-size:11px;color:var(--text-mute);margin-top:4px">Only enabled states are shown</div>
+      </div>
+
+      <div class="modal-field">
+        <div class="modal-label">Districts / Cities (optional, leave empty to affect entire state)</div>
+        <div id="rs-districts-wrap" style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border);border-radius:8px;padding:10px;background:var(--bg-alt)">
+          <div style="color:var(--text-mute);font-size:13px;text-align:center;padding:20px">Select a state above</div>
         </div>
       </div>
 
@@ -2360,31 +2616,47 @@ function openCreateRestrictionModal() {
   );
 }
 
+function rsUpdateDistricts() {
+  const stateName = document.getElementById('rs-state').value;
+  const wrap = document.getElementById('rs-districts-wrap');
+  const state = INDIA_STATES.find(s => s.name === stateName);
+  if (!state) { wrap.innerHTML = '<div style="color:var(--text-mute);font-size:13px;text-align:center;padding:20px">Select a state above</div>'; return; }
+  wrap.innerHTML = state.cities.map(c => `
+    <label style="display:flex;align-items:center;gap:8px;padding:6px;cursor:pointer;font-size:13px">
+      <input type="checkbox" class="checkbox rs-district-cb" value="${c}"/> ${c}
+    </label>
+  `).join('');
+}
+
 function submitRestriction() {
   const title = document.getElementById('rs-title').value.trim();
   const reason = document.getElementById('rs-reason').value.trim();
   const severity = document.getElementById('rs-severity').value;
+  const audience = document.getElementById('rs-audience').value;
+  const state = document.getElementById('rs-state').value;
   const endTimeRaw = document.getElementById('rs-end-time').value;
   const isLockdown = document.getElementById('rs-lockdown').checked;
   const districts = Array.from(document.querySelectorAll('.rs-district-cb:checked')).map(cb => cb.value);
 
   if (!title || title.length < 5) { showToast('Title required (min 5 chars)', 'error'); return; }
   if (!reason || reason.length < 10) { showToast('Detailed reason required (min 10 chars)', 'error'); return; }
-  if (districts.length === 0) { showToast('Select at least one district', 'error'); return; }
+  if (!state) { showToast('Select a state', 'error'); return; }
 
-  // Build features map: every feature is true by default; checked = disabled (false)
   const features = {};
   FEATURE_KEYS.forEach(f => {
     const cb = document.querySelector(`.rs-feature-cb[data-feature="${f.key}"]`);
-    features[f.key] = !cb.checked;  // checked means "disable", so feature = false
+    features[f.key] = !cb.checked;
   });
-  features.fullLockdown = !isLockdown;  // checked means lockdown active, so fullLockdown flag = false (disabled)
+  features.fullLockdown = !isLockdown;
 
-  if (!confirm(`Activate restriction in ${districts.length} district(s)? Users will be notified immediately.`)) return;
+  const audLabel = audience === 'users' ? 'Users only' : audience === 'helpers' ? 'Helpers only' : 'Both';
+  const areaLabel = districts.length > 0 ? districts.join(', ') : `entire ${state}`;
+  if (!confirm(`Activate restriction in ${areaLabel}?\n\nAudience: ${audLabel}\n\nAffected users will be notified immediately.`)) return;
 
   const payload = {
     title, reason, severity,
-    scope: 'district',
+    audience,
+    states: [state],
     districts,
     features,
     status: 'active',
@@ -2398,35 +2670,32 @@ function submitRestriction() {
   }
 
   db.collection('serviceRestrictions').add(payload).then(ref => {
-    logAudit('Activate service restriction', `${title} — ${districts.join(', ')}`);
+    logAudit('Activate service restriction', `${title} — ${areaLabel} (${audLabel})`);
 
-    // Notify all users + helpers in those districts
-    Promise.all(districts.map(district => {
-      return Promise.all([
-        db.collection('users').where('district', '==', district).get().then(snap => {
-          return Promise.all(snap.docs.map(d => db.collection('notifications').add({
-            userId: d.id,
-            type: 'service_restriction',
-            title: '🚧 Service Restriction Active',
-            body: `${title}: ${reason.substring(0, 100)}`,
-            data: { restrictionId: ref.id },
-            read: false,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          })));
-        }),
-        db.collection('helpers').where('district', '==', district).get().then(snap => {
-          return Promise.all(snap.docs.map(d => db.collection('notifications').add({
-            userId: d.id,
-            type: 'service_restriction',
-            title: '🚧 Service Restriction Active',
-            body: `${title}: ${reason.substring(0, 100)}`,
-            data: { restrictionId: ref.id },
-            read: false,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          })));
-        }),
-      ]);
-    })).catch(e => console.log('Notify error:', e));
+    // Notify affected audience
+    const notifyTargets = [];
+    if (audience === 'users' || audience === 'both') notifyTargets.push('users');
+    if (audience === 'helpers' || audience === 'both') notifyTargets.push('helpers');
+
+    notifyTargets.forEach(coll => {
+      let q = db.collection(coll);
+      if (districts.length > 0) {
+        q = q.where('district', 'in', districts.slice(0, 10));
+      } else {
+        q = q.where('state', '==', state);
+      }
+      q.get().then(snap => {
+        snap.docs.forEach(d => db.collection('notifications').add({
+          userId: d.id,
+          type: 'service_restriction',
+          title: '🚧 Service Restriction Active',
+          body: `${title}: ${reason.substring(0, 100)}`,
+          data: { restrictionId: ref.id },
+          read: false,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }));
+      });
+    });
 
     showToast('✅ Restriction activated. Affected users notified.', 'success');
     closeModal();
@@ -2435,36 +2704,35 @@ function submitRestriction() {
 }
 
 function resumeRestriction(id) {
-  const r = restrictions.find(x => x.id === id);
-  if (!r) return;
-  if (!confirm(`Resume services in ${(r.districts || []).join(', ')}?`)) return;
+  const r = restrictions.find(x => x.id === id); if (!r) return;
+  const areaLabel = (r.districts && r.districts.length > 0) ? r.districts.join(', ') : (r.states || []).join(', ');
+  if (!confirm(`Resume services in ${areaLabel}?`)) return;
 
   db.collection('serviceRestrictions').doc(id).update({
     status: 'resumed',
     resumedAt: firebase.firestore.FieldValue.serverTimestamp(),
     resumedBy: currentAdmin.email || 'Admin',
   }).then(() => {
-    logAudit('Resume service restriction', `${r.title} — ${(r.districts || []).join(', ')}`);
+    logAudit('Resume service restriction', `${r.title} — ${areaLabel}`);
 
-    // Notify users that services are restored
-    (r.districts || []).forEach(district => {
-      db.collection('users').where('district', '==', district).get().then(snap => {
+    const audience = r.audience || 'both';
+    const notifyTargets = [];
+    if (audience === 'users' || audience === 'both') notifyTargets.push('users');
+    if (audience === 'helpers' || audience === 'both') notifyTargets.push('helpers');
+
+    notifyTargets.forEach(coll => {
+      let q = db.collection(coll);
+      if (r.districts && r.districts.length > 0) {
+        q = q.where('district', 'in', r.districts.slice(0, 10));
+      } else if (r.states && r.states.length > 0) {
+        q = q.where('state', '==', r.states[0]);
+      }
+      q.get().then(snap => {
         snap.docs.forEach(d => db.collection('notifications').add({
           userId: d.id,
           type: 'service_resumed',
           title: '✅ Services Restored',
-          body: `Services in ${district} have been restored. Thank you for your patience.`,
-          data: { restrictionId: id },
-          read: false,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        }));
-      });
-      db.collection('helpers').where('district', '==', district).get().then(snap => {
-        snap.docs.forEach(d => db.collection('notifications').add({
-          userId: d.id,
-          type: 'service_resumed',
-          title: '✅ Services Restored',
-          body: `Services in ${district} have been restored. Thank you for your patience.`,
+          body: `Services in ${areaLabel} have been restored. Thank you for your patience.`,
           data: { restrictionId: id },
           read: false,
           createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -2478,10 +2746,12 @@ function resumeRestriction(id) {
 }
 
 function viewRestriction(id) {
-  const r = restrictions.find(x => x.id === id);
-  if (!r) return;
-
+  const r = restrictions.find(x => x.id === id); if (!r) return;
   const features = r.features || {};
+  const audience = r.audience || 'both';
+  const audLabel = audience === 'users' ? '👥 Users only' : audience === 'helpers' ? '🛡️ Helpers only' : '👥+🛡️ Both';
+  const areaLabel = (r.districts && r.districts.length > 0) ? r.districts.join(', ') : (r.states || []).join(', ');
+
   const featureRows = FEATURE_KEYS.map(f => `
     <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light);font-size:13px">
       <span>${f.label}</span>
@@ -2499,7 +2769,8 @@ function viewRestriction(id) {
     <div class="modal-body">
       ${mf('Severity', `<span class="badge badge-${r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info'}">${(r.severity || 'info').toUpperCase()}</span>`)}
       ${mf('Status', `<span class="badge badge-${r.status === 'active' ? 'danger' : 'gray'}">${r.status || 'unknown'}</span>`)}
-      ${mf('Districts', (r.districts || []).join(', ') || '—')}
+      ${mf('Audience', `<span class="badge badge-info">${audLabel}</span>`)}
+      ${mf('Area', areaLabel || '—')}
       ${mf('Reason', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px">${r.reason || '—'}</div>`)}
       ${mf('Started', fDate(r.createdAt))}
       ${mf('Ends', r.endsAt ? fDate(r.endsAt) : '<i>Until manually resumed</i>')}
@@ -2519,6 +2790,7 @@ function viewRestriction(id) {
     </div>`
   );
 }
+
 
 function decideAppeal(id, decision) {
   const a = appeals.find(x => x.id === id); if (!a) return;
