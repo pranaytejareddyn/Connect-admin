@@ -345,6 +345,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-item" data-page="reports"><span class="nav-icon">🐛</span>Reports <span class="nav-badge" id="badge-reports" style="display:none">0</span></div>
     <div class="nav-item" data-page="moderation"><span class="nav-icon">⚖️</span>Moderation</div>
     <div class="nav-item" data-page="appeals"><span class="nav-icon">🙋</span>Appeals <span class="nav-badge" id="badge-appeals" style="display:none">0</span></div>
+    <div class="nav-item" data-page="location-requests"><span class="nav-icon">📍</span>Location Requests <span class="nav-badge" id="badge-location-requests" style="display:none">0</span></div>
 
     <div class="nav-section">Insights</div>
     <div class="nav-item" data-page="regions"><span class="nav-icon">🗺️</span>Regions</div>
@@ -577,6 +578,45 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         </div>
       </div>
 
+      <!-- LOCATION CHANGE REQUESTS -->
+      <div class="page" id="page-location-requests">
+        <div class="page-head">
+          <div>
+            <div class="page-title">📍 Location Change Requests</div>
+            <div class="page-sub">Review user/helper location change submissions</div>
+          </div>
+          <button class="btn btn-ghost" onclick="exportLocationRequests()">📥 Export CSV</button>
+        </div>
+
+        <div class="stats-grid" id="location-requests-stats"></div>
+
+        <div class="card">
+          <div class="card-head" style="flex-direction:column;align-items:stretch;gap:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div class="card-title">Requests</div>
+                <div class="card-sub" id="location-requests-count">0 results</div>
+              </div>
+              <input type="text" id="lr-search" class="form-input" placeholder="Search by name, ID..." style="max-width:280px" oninput="renderLocationRequests()"/>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+              <span style="font-size:11px;color:var(--text-mute);font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Status:</span>
+              <button class="filter-chip active" data-lr-status="pending" onclick="setLocationRequestFilter('status','pending')">⏳ Pending</button>
+              <button class="filter-chip" data-lr-status="info_requested" onclick="setLocationRequestFilter('status','info_requested')">❓ Need Info</button>
+              <button class="filter-chip" data-lr-status="approved" onclick="setLocationRequestFilter('status','approved')">✅ Approved</button>
+              <button class="filter-chip" data-lr-status="rejected" onclick="setLocationRequestFilter('status','rejected')">❌ Rejected</button>
+              <button class="filter-chip" data-lr-status="all" onclick="setLocationRequestFilter('status','all')">All</button>
+              <span style="border-left:1px solid var(--border);height:20px;margin:0 6px"></span>
+              <span style="font-size:11px;color:var(--text-mute);font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Type:</span>
+              <button class="filter-chip active" data-lr-type="all" onclick="setLocationRequestFilter('type','all')">All</button>
+              <button class="filter-chip" data-lr-type="helper" onclick="setLocationRequestFilter('type','helper')">🛡️ Helpers</button>
+              <button class="filter-chip" data-lr-type="user" onclick="setLocationRequestFilter('type','user')">👥 Users</button>
+            </div>
+          </div>
+          <div class="table-wrap" id="location-requests-table"></div>
+        </div>
+      </div>
+
       <!-- REGIONS -->
       <div class="page" id="page-regions">
         <div class="page-head">
@@ -720,8 +760,9 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 
 // ── State ──
-let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[];
+let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[];
 let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
+let lrStatusFilter='pending', lrTypeFilter='all';
 let userSearchText='', helperSearchText='', userDistrict='', helperDistrict='';
 let selectedUsers=new Set(), selectedHelpers=new Set();
 let currentAdmin = { email: '', name: 'Admin' };
@@ -804,6 +845,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'service-control') {
       Promise.all([loadRestrictions(), loadEnabledRegions()]).then(renderRestrictions);
     }
+    if (page === 'location-requests') loadLocationRequests().then(renderLocationRequests);
   });
 });
 
@@ -892,7 +934,7 @@ document.getElementById('modal').addEventListener('click', e => {
 
 // ── Load All Data ──
 function loadAll() {
-  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements(), loadRestrictions(), loadEnabledRegions()])
+  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements(), loadRestrictions(), loadEnabledRegions(), loadLocationRequests()])
     .then(() => {
       updateOverview();
       renderUsers();
@@ -905,6 +947,7 @@ function loadAll() {
       renderAppeals();
       renderAgreements();
       renderRestrictions();
+      renderLocationRequests();
     });
 }
 
@@ -967,6 +1010,13 @@ function loadEnabledRegions() {
   return db.collection('enabledRegions').get().then(snap => {
     enabledRegions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }).catch(e => { console.log('Load enabledRegions error:', e); enabledRegions = []; });
+}
+function loadLocationRequests() {
+  return db.collection('locationChangeRequests').get().then(snap => {
+    locationRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+    setBadge('badge-location-requests', locationRequests.filter(r => r.status === 'pending' || r.status === 'info_requested').length);
+  }).catch(e => { console.log('Load location requests error:', e); locationRequests = []; });
 }
 function loadAuditLogs() {
   db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).get().then(snap => {
@@ -2789,6 +2839,348 @@ function viewRestriction(id) {
       ${r.status === 'active' ? `<button class="btn btn-success" onclick="resumeRestriction('${r.id}');closeModal()">▶️ Resume Now</button>` : ''}
     </div>`
   );
+}
+
+
+// ── Location Change Requests ──
+const LR_STATUS = {
+  pending:        { label: 'Pending', emoji: '⏳', color: 'warning' },
+  info_requested: { label: 'Info Requested', emoji: '❓', color: 'warning' },
+  approved:       { label: 'Approved', emoji: '✅', color: 'success' },
+  rejected:       { label: 'Rejected', emoji: '❌', color: 'danger' },
+};
+
+function setLocationRequestFilter(field, value) {
+  if (field === 'status') {
+    lrStatusFilter = value;
+    document.querySelectorAll('[data-lr-status]').forEach(el => {
+      el.classList.toggle('active', el.dataset.lrStatus === value);
+    });
+  } else if (field === 'type') {
+    lrTypeFilter = value;
+    document.querySelectorAll('[data-lr-type]').forEach(el => {
+      el.classList.toggle('active', el.dataset.lrType === value);
+    });
+  }
+  renderLocationRequests();
+}
+
+function renderLocationRequests() {
+  if (!document.getElementById('location-requests-stats')) return;
+
+  // Stats
+  const pending = locationRequests.filter(r => r.status === 'pending').length;
+  const info = locationRequests.filter(r => r.status === 'info_requested').length;
+  const approved = locationRequests.filter(r => r.status === 'approved').length;
+  const rejected = locationRequests.filter(r => r.status === 'rejected').length;
+
+  document.getElementById('location-requests-stats').innerHTML = [
+    { label: 'Pending Review', val: pending,  icon: '⏳', bg: 'warning' },
+    { label: 'Need More Info', val: info,     icon: '❓', bg: 'warning' },
+    { label: 'Approved',       val: approved, icon: '✅', bg: 'success' },
+    { label: 'Rejected',       val: rejected, icon: '❌', bg: 'danger' },
+  ].map(s => `
+    <div class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-label">${s.label}</div>
+        <div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div>
+      </div>
+      <div class="stat-value">${s.val}</div>
+    </div>
+  `).join('');
+
+  // Filter
+  const searchEl = document.getElementById('lr-search');
+  const search = (searchEl?.value || '').trim().toLowerCase();
+
+  let list = locationRequests.slice();
+  if (lrStatusFilter !== 'all') list = list.filter(r => r.status === lrStatusFilter);
+  if (lrTypeFilter !== 'all') {
+    // Helper requests have helperRating/helperTrustScore; user requests don't
+    list = list.filter(r => {
+      const isHelper = !!r.helperId; // all our location requests are from helpers right now
+      return lrTypeFilter === 'helper' ? isHelper : !isHelper;
+    });
+  }
+  if (search) {
+    list = list.filter(r =>
+      (r.helperName || '').toLowerCase().includes(search) ||
+      (r.helperId || '').toLowerCase().includes(search) ||
+      (r.newDistrict || '').toLowerCase().includes(search) ||
+      (r.newState || '').toLowerCase().includes(search) ||
+      (r.currentDistrict || '').toLowerCase().includes(search)
+    );
+  }
+
+  document.getElementById('location-requests-count').textContent = `${list.length} result${list.length !== 1 ? 's' : ''}`;
+
+  if (list.length === 0) {
+    document.getElementById('location-requests-table').innerHTML =
+      empty('📭', 'No location change requests', 'When users or helpers submit location changes, they appear here');
+    return;
+  }
+
+  document.getElementById('location-requests-table').innerHTML =
+    `<table class="table"><thead><tr>
+      <th>Account</th><th>Current Location</th><th>Requested Location</th><th>Reason</th><th>Trust Score</th><th>Submitted</th><th>Status</th><th>Actions</th>
+    </tr></thead><tbody>` + list.map(r => {
+      const cfg = LR_STATUS[r.status] || LR_STATUS.pending;
+      const accountTypeLabel = '🛡️ Helper'; // currently only helpers submit
+      const proofCount = (r.proofUrls || []).length;
+      const reasonLabel = (r.reasonCategory || '').replace(/_/g, ' ');
+      return `<tr>
+        <td>
+          <div style="font-weight:700">${r.helperName || '—'}</div>
+          <div class="user-meta">${accountTypeLabel} · ID: ${(r.helperId || '').substring(0, 8)}...</div>
+        </td>
+        <td>
+          <div>${r.currentDistrict || '—'}</div>
+          <div class="user-meta">${r.currentState || ''}</div>
+        </td>
+        <td>
+          <div style="color:var(--primary);font-weight:700">→ ${r.newDistrict || '—'}</div>
+          <div class="user-meta">${r.newState || ''}${r.newCity ? ' · ' + r.newCity : ''}</div>
+        </td>
+        <td>
+          <div style="text-transform:capitalize">${reasonLabel || '—'}</div>
+          <div class="user-meta">${proofCount} proof${proofCount !== 1 ? 's' : ''}</div>
+        </td>
+        <td>${r.helperTrustScore ? `${r.helperTrustScore}/100` : '—'}</td>
+        <td>${fDate(r.createdAt)}</td>
+        <td><span class="badge badge-${cfg.color}">${cfg.emoji} ${cfg.label}</span></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewLocationRequest('${r.id}')">Review</button></td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+}
+
+function viewLocationRequest(id) {
+  const r = locationRequests.find(x => x.id === id);
+  if (!r) return;
+  const cfg = LR_STATUS[r.status] || LR_STATUS.pending;
+
+  // Find related helper for full profile
+  const helperFull = helpers.find(h => h.id === r.helperId) || {};
+  const previousChanges = locationRequests
+    .filter(lr => lr.helperId === r.helperId && lr.id !== r.id)
+    .slice(0, 5);
+
+  // Build proof gallery
+  const proofGallery = (r.proofUrls || []).length > 0
+    ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-top:8px">
+        ${(r.proofUrls || []).map((url, i) => `
+          <a href="${url}" target="_blank" rel="noopener" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none">
+            <img src="${url}" alt="Proof ${i + 1}" style="width:100%;height:140px;object-fit:cover;display:block"/>
+            <div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">📄 Proof ${i + 1} · Click to enlarge</div>
+          </a>
+        `).join('')}
+      </div>`
+    : '<div style="color:var(--text-mute);font-style:italic;padding:8px">No documents uploaded</div>';
+
+  const showActions = r.status === 'pending' || r.status === 'info_requested';
+
+  showModal(
+    `<div class="modal-header">
+      <div class="modal-title">📍 Location Change Request</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <span class="badge badge-${cfg.color}">${cfg.emoji} ${cfg.label}</span>
+        <span style="font-size:12px;color:var(--text-mute)">Submitted: ${fDate(r.createdAt)}</span>
+      </div>
+
+      <div class="modal-section-header">👤 Account</div>
+      ${mf('Name', r.helperName || '—')}
+      ${mf('Account Type', '🛡️ Helper')}
+      ${mf('Account ID', `<code style="background:var(--bg-alt);padding:2px 6px;border-radius:4px">${r.helperId || ''}</code>`)}
+      ${r.helperPhone ? mf('Phone', r.helperPhone) : ''}
+      ${typeof r.helperRating === 'number' ? mf('Rating', `⭐ ${r.helperRating.toFixed(1)}/5`) : ''}
+      ${typeof r.helperTrustScore === 'number' ? mf('Trust Score', `🏆 ${r.helperTrustScore}/100`) : ''}
+      ${helperFull.totalRequests ? mf('Completed Jobs', `${helperFull.totalRequests}`) : ''}
+      ${helperFull.verificationStatus ? mf('Verified', helperFull.verificationStatus === 'verified' ? '✅ Yes' : '⏳ Pending') : ''}
+
+      <div class="modal-section-header">🗺️ Location Change</div>
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;background:var(--bg-alt);padding:14px;border-radius:8px;margin-bottom:12px">
+        <div>
+          <div style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:0.5px;font-weight:700">From</div>
+          <div style="font-weight:800;margin-top:4px">${r.currentDistrict || '—'}</div>
+          <div style="font-size:12px;color:var(--text-sec)">${r.currentState || ''}</div>
+          ${r.currentVillage ? `<div style="font-size:11px;color:var(--text-mute);margin-top:2px">${r.currentVillage}</div>` : ''}
+        </div>
+        <div style="font-size:24px;color:var(--primary)">→</div>
+        <div>
+          <div style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:0.5px;font-weight:700">To</div>
+          <div style="font-weight:800;color:var(--primary);margin-top:4px">${r.newDistrict || '—'}</div>
+          <div style="font-size:12px;color:var(--text-sec)">${r.newState || ''}${r.newCity ? ' · ' + r.newCity : ''}</div>
+          ${r.newVillage ? `<div style="font-size:11px;color:var(--text-mute);margin-top:2px">${r.newVillage}</div>` : ''}
+        </div>
+      </div>
+
+      <div class="modal-section-header">📝 Reason</div>
+      ${mf('Category', `<span style="text-transform:capitalize">${(r.reasonCategory || '').replace(/_/g, ' ')}</span>`)}
+      <div style="background:var(--bg-alt);padding:12px;border-radius:8px;font-size:13px;line-height:1.6;margin-bottom:12px;border-left:3px solid var(--primary)">
+        ${(r.reason || 'No detailed reason provided').replace(/\n/g, '<br>')}
+      </div>
+
+      <div class="modal-section-header">📄 Proof Documents (${(r.proofUrls || []).length})</div>
+      ${(r.proofTypes && r.proofTypes.length > 0) ? `<div style="font-size:12px;color:var(--text-sec);margin-bottom:6px">Document type: <strong>${r.proofTypes[0]}</strong></div>` : ''}
+      ${proofGallery}
+
+      ${previousChanges.length > 0 ? `
+        <div class="modal-section-header" style="margin-top:16px">📜 Previous Location Changes</div>
+        <div style="background:var(--bg-alt);border-radius:8px;padding:8px">
+          ${previousChanges.map(p => {
+            const pcfg = LR_STATUS[p.status] || LR_STATUS.pending;
+            return `<div style="display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid var(--border-light);font-size:12px">
+              <div>${p.currentDistrict} → <strong>${p.newDistrict}</strong></div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span class="badge badge-${pcfg.color}" style="font-size:9px">${pcfg.emoji} ${pcfg.label}</span>
+                <span style="color:var(--text-mute)">${fDate(p.createdAt)}</span>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      ` : ''}
+
+      ${r.adminNote ? `
+        <div class="modal-section-header" style="margin-top:16px">💬 Previous Admin Note</div>
+        <div style="background:var(--warning-light);padding:10px;border-radius:8px;font-size:13px;border-left:3px solid var(--warning)">
+          ${r.adminNote}
+          ${r.reviewedBy ? `<div style="font-size:11px;color:var(--text-mute);margin-top:4px">— ${r.reviewedBy} on ${fDate(r.reviewedAt)}</div>` : ''}
+        </div>
+      ` : ''}
+
+      ${showActions ? `
+        <div class="modal-section-header" style="margin-top:16px">⚖️ Admin Decision</div>
+        <div class="modal-field">
+          <div class="modal-label">Admin Comment (Required)</div>
+          <textarea id="lr-admin-note" class="form-textarea" placeholder="Explain your decision (required for approve/reject/request more info)..." maxlength="500"></textarea>
+        </div>
+      ` : ''}
+
+    </div>
+    <div class="modal-footer" style="${showActions ? '' : 'justify-content:flex-end'}">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      ${showActions ? `
+        <button class="btn btn-warning" onclick="decideLocationRequest('${r.id}','info_requested')">❓ Request More Info</button>
+        <button class="btn btn-danger" onclick="decideLocationRequest('${r.id}','rejected')">❌ Reject</button>
+        <button class="btn btn-success" onclick="decideLocationRequest('${r.id}','approved')">✅ Approve</button>
+      ` : ''}
+    </div>`
+  );
+}
+
+function decideLocationRequest(id, decision) {
+  const r = locationRequests.find(x => x.id === id);
+  if (!r) return;
+  const noteEl = document.getElementById('lr-admin-note');
+  const note = (noteEl?.value || '').trim();
+
+  if (decision === 'rejected' && !note) {
+    showToast('Please provide a reason for rejection', 'error');
+    return;
+  }
+  if (decision === 'info_requested' && !note) {
+    showToast('Please specify what info is needed', 'error');
+    return;
+  }
+  if (decision === 'approved' && note.length === 0 && !confirm('Approve without a comment?')) {
+    return;
+  }
+
+  const adminEmail = currentAdmin.email || 'Admin';
+  const updates = {
+    status: decision,
+    adminNote: note,
+    reviewedBy: adminEmail,
+    reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  };
+
+  const promises = [db.collection('locationChangeRequests').doc(id).update(updates)];
+
+  // If approved → also update helper's actual location
+  if (decision === 'approved') {
+    promises.push(
+      db.collection('helpers').doc(r.helperId).update({
+        state: r.newState,
+        district: r.newDistrict,
+        village: r.newVillage || r.newCity || '',
+        locationUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }).catch(e => { console.log('Helper location update failed:', e); })
+    );
+  }
+
+  // Send notification
+  const notifConfig = {
+    approved:        { type: 'location_change_approved',        title: '✅ Location Updated',          body: `Your new location is now ${r.newDistrict}, ${r.newState}. You'll appear in searches for that region.${note ? ' Admin note: ' + note : ''}` },
+    rejected:        { type: 'location_change_rejected',        title: '❌ Location Change Rejected',  body: note },
+    info_requested:  { type: 'location_change_info_requested',  title: '❓ More Info Needed',          body: note },
+  };
+  const nc = notifConfig[decision];
+  if (nc) {
+    promises.push(
+      db.collection('notifications').add({
+        userId: r.helperId,
+        type: nc.type,
+        title: nc.title,
+        body: nc.body,
+        data: { requestId: id },
+        read: false,
+        deleted: false,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }).catch(e => { console.log('Notification failed:', e); })
+    );
+  }
+
+  Promise.all(promises).then(() => {
+    logAudit(`Location request ${decision}`,
+      `${r.helperName} (${r.currentDistrict} → ${r.newDistrict}): ${note || '(no comment)'}`);
+
+    const toastMsg =
+      decision === 'approved' ? '✅ Location approved. Helper notified and location updated.' :
+      decision === 'rejected' ? '❌ Request rejected. Helper notified.' :
+      '❓ Helper notified to provide more info.';
+    showToast(toastMsg, 'success');
+    closeModal();
+    loadLocationRequests().then(renderLocationRequests);
+  }).catch(e => {
+    showToast('Error: ' + e.message, 'error');
+  });
+}
+
+function exportLocationRequests() {
+  const rows = [['ID', 'Helper Name', 'Helper ID', 'Phone', 'Current State', 'Current District', 'New State', 'New District', 'New City', 'Reason Category', 'Reason', 'Status', 'Trust Score', 'Submitted', 'Reviewed By', 'Reviewed At', 'Admin Note']];
+  locationRequests.forEach(r => {
+    rows.push([
+      r.id,
+      r.helperName || '',
+      r.helperId || '',
+      r.helperPhone || '',
+      r.currentState || '',
+      r.currentDistrict || '',
+      r.newState || '',
+      r.newDistrict || '',
+      r.newCity || '',
+      r.reasonCategory || '',
+      (r.reason || '').replace(/[\r\n,]/g, ' '),
+      r.status || '',
+      r.helperTrustScore || '',
+      fDate(r.createdAt),
+      r.reviewedBy || '',
+      r.reviewedAt ? fDate(r.reviewedAt) : '',
+      (r.adminNote || '').replace(/[\r\n,]/g, ' '),
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `location-requests-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('CSV exported', 'success');
 }
 
 
