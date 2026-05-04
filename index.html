@@ -1284,68 +1284,24 @@ function renderHelpers() {
 function viewHelper(id) {
   const h = helpers.find(x => x.id === id); if (!h) return;
   const locFull = `${h.state ? '🇮🇳 ' + h.state : ''}${h.district ? ' / ' + h.district : ''}${h.city ? ' / ' + h.city : ''}${h.village && h.village !== h.city ? ' / ' + h.village : ''}` || '—';
-
-  // Document link helpers
-  const docLink = (url, label) => url
-    ? `<a href="${url}" target="_blank" style="color:var(--primary);text-decoration:underline;font-weight:600">📎 View ${label}</a>`
-    : `<span style="color:var(--text-mute)">Not uploaded</span>`;
-
-  const identityTypeLabels = {
-    aadhaar: 'Aadhaar Card', voter: 'Voter ID', dl: 'Driving License', pan: 'PAN Card'
-  };
-  const residencyTypeLabels = {
-    aadhaar_addr: 'Aadhaar (with address)', voter_addr: 'Voter ID',
-    electricity: 'Electricity Bill', rental: 'Rental Agreement', passbook: 'Bank Passbook'
-  };
-
-  const selfieUrl = (h.documents && h.documents.selfie) || h.selfieUrl || '';
-  const aadharUrl = (h.documents && h.documents.aadhar) || h.aadharUrl || '';
-  const addressUrl = (h.documents && h.documents.addressProof) || h.addressProofUrl || '';
-
   showModal(
     `<div class="modal-header"><div class="modal-title">🛡️ Helper Profile</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-
-      <div class="modal-section-header">📋 Basic Info</div>
       ${mf('Name', h.name || '—')}
       ${mf('Phone', h.phone || '—')}
       ${mf('Helper ID', `<code>${h.id}</code>`)}
-      ${h.age ? mf('Age', h.age) : ''}
-      ${h.gender ? mf('Gender', h.gender) : ''}
-      ${h.languages && h.languages.length ? mf('Languages', h.languages.join(', ')) : ''}
-      ${h.bio ? mf('Bio', `<em>${h.bio}</em>`) : ''}
       ${mf('Location', locFull)}
-
-      <div class="modal-section-header">📊 Status</div>
-      ${mf('Status', h.isBlocked ? '🚫 Blocked' : h.isSuspended ? '⚠️ Suspended' : `<span class="badge badge-${h.status === 'approved' ? 'approved' : h.status === 'rejected' ? 'rejected' : 'pending'}">${h.status || 'pending'}</span>`)}
-      ${mf('Verified', h.isVerified ? '✅ Yes' : '—')}
+      ${mf('Status', h.isBlocked ? '🚫 Blocked' : h.isSuspended ? '⚠️ Suspended' : (h.status || 'pending'))}
+      ${mf('Verified', h.isVerified ? '✅ Yes (Aadhaar)' : '—')}
       ${mf('Online', h.isOnline ? '🟢 Online' : '⚫ Offline')}
-
-      <div class="modal-section-header">🛠️ Services & Pricing</div>
       ${mf('Skills', (h.skills||[]).join(', ') || '—')}
-      ${h.otherSkillText ? mf('Other Skill Detail', h.otherSkillText) : ''}
-      ${mf('Pricing', h.pricingType === 'free' ? '💚 Free' : `💰 ₹${h.hourlyRate || 0}/hr`)}
-
-      <div class="modal-section-header">🕐 Availability</div>
-      ${h.availableHours ? mf('Hours', h.availableHours) : ''}
-      ${h.availableDays && h.availableDays.length ? mf('Days', h.availableDays.join(', ')) : ''}
-
-      <div class="modal-section-header">📄 Documents</div>
-      ${mf('Selfie', docLink(selfieUrl, 'Selfie'))}
-      ${mf('Identity Doc Type', h.identityDocType ? (identityTypeLabels[h.identityDocType] || h.identityDocType) : '—')}
-      ${mf('Identity Document', docLink(aadharUrl, 'Identity Doc'))}
-      ${mf('Residency Doc Type', h.residencyDocType ? (residencyTypeLabels[h.residencyDocType] || h.residencyDocType) : '—')}
-      ${mf('Residency Document', docLink(addressUrl, 'Residency Doc'))}
-      ${h.gpsLocation ? mf('GPS Location', `📍 ${Number(h.gpsLocation.lat).toFixed(5)}, ${Number(h.gpsLocation.lng).toFixed(5)} <a href="https://maps.google.com/?q=${h.gpsLocation.lat},${h.gpsLocation.lng}" target="_blank" style="color:var(--primary);margin-left:8px">Open Map ↗</a>`) : ''}
-      ${h.declarationAcceptedAt ? mf('Declaration Accepted', new Date(h.declarationAcceptedAt).toLocaleString('en-IN')) : ''}
-
-      <div class="modal-section-header">📈 Performance</div>
+      ${mf('Pricing', h.pricingType === 'free' ? 'Free' : `₹${h.hourlyRate || 0}/hr`)}
+      <div class="modal-section-header">Performance</div>
       ${mf('Rating', h.rating ? `⭐ ${Number(h.rating).toFixed(1)} (${h.totalRatings || 0} reviews)` : 'No ratings yet')}
       ${mf('Completed Tasks', h.totalRequests || 0)}
       ${mf('Community Trust Index', `${h.communityTrustIndex || 50}/100`)}
       ${mf('Repeat Users', h.repeatUsers || 0)}
       ${h.cancellationRate ? mf('Cancellation Rate', `${Math.round((h.cancellationRate || 0) * 100)}%`) : ''}
-
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
@@ -1381,53 +1337,15 @@ function helperAction(id, action) {
 
 // ── Verification ──
 function renderVerification() {
-  // Include any helper pending approval OR with explicit verificationStatus
-  let f = helpers.filter(h => h.verificationStatus || h.status === 'pending' || h.status === 'approved' || h.status === 'rejected');
-  if (verificationFilter === 'pending') f = f.filter(h => h.verificationStatus === 'pending' || h.status === 'pending');
-  else if (verificationFilter === 'verified') f = f.filter(h => h.verificationStatus === 'verified' || h.status === 'approved');
-  else if (verificationFilter === 'rejected') f = f.filter(h => h.verificationStatus === 'rejected' || h.status === 'rejected');
-
-  const identityTypeLabels = {
-    aadhaar: 'Aadhaar', voter: 'Voter ID', dl: 'Driving Licence', pan: 'PAN Card'
-  };
-
+  let f = helpers.filter(h => h.verificationStatus || h.status === 'pending');
+  if (verificationFilter === 'pending') f = f.filter(h => h.verificationStatus === 'pending');
+  else if (verificationFilter === 'verified') f = f.filter(h => h.verificationStatus === 'verified');
+  else if (verificationFilter === 'rejected') f = f.filter(h => h.verificationStatus === 'rejected');
   document.getElementById('verification-table').innerHTML = f.length === 0 ? empty('✅','No verifications','All caught up!') :
-    `<table class="table"><thead><tr>
-      <th>Helper</th><th>Phone</th><th>Age / Gender</th><th>Identity Doc</th><th>Residency Doc</th><th>Selfie</th><th>Status</th><th>Declared</th><th>Actions</th>
-    </tr></thead><tbody>` + f.map(h => {
-      const status = h.status || h.verificationStatus || 'pending';
-      const badge = `<span class="badge badge-${status === 'approved' || status === 'verified' ? 'approved' : status === 'rejected' ? 'rejected' : 'pending'}">${status}</span>`;
-
-      const selfieUrl = (h.documents && h.documents.selfie) || '';
-      const aadharUrl = (h.documents && h.documents.aadhar) || '';
-      const addressUrl = (h.documents && h.documents.addressProof) || '';
-
-      const docCell = (url, label) => url
-        ? `<a href="${url}" target="_blank" title="View ${label}" style="color:var(--primary);font-weight:600;font-size:12px">📎 View</a>`
-        : `<span style="color:var(--text-mute);font-size:12px">—</span>`;
-
-      const identityLabel = h.identityDocType ? (identityTypeLabels[h.identityDocType] || h.identityDocType) : '—';
-      const residencyLabel = h.residencyDocType || (h.gpsLocation ? '📍 GPS' : '—');
-
-      return `<tr>
-        <td><strong>${h.name || '—'}</strong><br><span style="font-size:11px;color:var(--text-mute)">${h.village || ''}${h.district ? ', ' + h.district : ''}</span></td>
-        <td>${h.phone || '—'}</td>
-        <td>${h.age || '—'} / ${h.gender || '—'}</td>
-        <td>
-          <div style="font-size:12px;font-weight:600">${identityLabel}</div>
-          ${docCell(aadharUrl, 'Identity')}
-        </td>
-        <td>
-          <div style="font-size:12px;font-weight:600">${residencyLabel}</div>
-          ${h.gpsLocation ? `<a href="https://maps.google.com/?q=${h.gpsLocation.lat},${h.gpsLocation.lng}" target="_blank" style="color:var(--primary);font-size:12px;font-weight:600">📍 Map</a>` : docCell(addressUrl, 'Residency')}
-        </td>
-        <td>${docCell(selfieUrl, 'Selfie')}</td>
-        <td>${badge}</td>
-        <td style="font-size:11px">${h.declarationAcceptedAt ? new Date(h.declarationAcceptedAt).toLocaleDateString('en-IN') : '—'}</td>
-        <td>
-          <button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">Manage</button>
-        </td>
-      </tr>`;
+    `<table class="table"><thead><tr><th>Helper</th><th>Phone</th><th>Method</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(h => {
+      const s = h.verificationStatus || 'not_submitted';
+      const badge = `<span class="badge badge-${s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : 'pending'}">${s}</span>`;
+      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${h.verificationMethod || 'Aadhaar'}</td><td>${badge}</td><td>${fDate(h.verifiedAt || h.createdAt)}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">View</button></td></tr>`;
     }).join('') + `</tbody></table>`;
 }
 
@@ -2552,4 +2470,3 @@ function empty(emoji, title, sub) {
 </script>
 
 </body>
-</html>
