@@ -1265,7 +1265,12 @@ function renderHelpers() {
         h.isSuspended ? '<span class="badge badge-suspended">⚠️ Suspended</span>' :
         h.status === 'approved' ? '<span class="badge badge-active">✅ Active</span>' :
         h.status === 'rejected' ? '<span class="badge badge-rejected">❌ Rejected</span>' : '<span class="badge badge-pending">⏳ Pending</span>';
-      const verifyBadge = h.isVerified || h.verificationStatus === 'verified' ? '<span class="badge badge-verified">✓</span>' : '<span class="badge badge-unverified">—</span>';
+      // Verification status — fully verified if both ID and residency are verified
+      const fullyVerified = h.idProof?.verified && h.residencyProof?.verified;
+      const partVerified = h.idProof?.verified || h.residencyProof?.verified || h.isVerified || h.verificationStatus === 'verified';
+      const verifyBadge = fullyVerified ? '<span class="badge badge-verified">✓ Full</span>' :
+        partVerified ? '<span class="badge badge-warning">⚠ Partial</span>' :
+        '<span class="badge badge-unverified">—</span>';
       const online = h.isOnline ? ' 🟢' : '';
       const initials = (h.name || '?').substring(0, 2).toUpperCase();
       return `<tr>
@@ -1281,27 +1286,209 @@ function renderHelpers() {
     }).join('') + `</tbody></table>`;
 }
 
+// ============================================================================
+// PATCHED: Verify a single document (idProof or residencyProof) on a helper.
+// Uses Firestore field-path syntax to update nested fields without overwriting
+// the entire object.
+// ============================================================================
+function verifyHelperDocument(id, kind) {
+  // kind: 'idProof' | 'residencyProof'
+  const h = helpers.find(x => x.id === id); if (!h) return;
+  const node = h[kind] || {};
+  const current = !!node.verified;
+  const docLabel = kind === 'idProof' ? 'identity proof' : 'residency proof';
+  const action = current ? 'mark this as NOT verified' : 'mark this as verified';
+  if (!confirm(`Are you sure you want to ${action} ${docLabel}?`)) return;
+
+  const newVerified = !current;
+  const updates = {};
+  updates[`${kind}.verified`] = newVerified;
+  if (newVerified) {
+    updates[`${kind}.verifiedAt`] = firebase.firestore.FieldValue.serverTimestamp();
+    updates[`${kind}.verifiedBy`] = currentAdmin.email || 'Admin';
+  } else {
+    updates[`${kind}.verifiedAt`] = null;
+    updates[`${kind}.verifiedBy`] = null;
+  }
+
+  db.collection('helpers').doc(id).update(updates).then(() => {
+    if (!h[kind]) h[kind] = {};
+    h[kind].verified = newVerified;
+    logAudit(`${docLabel} ${newVerified ? 'verified' : 'un-verified'}`, `${h.name || h.phone} (${id.slice(0,8)})`);
+    showToast(`✅ ${docLabel} ${newVerified ? 'marked verified' : 'un-verified'}`, 'success');
+    closeModal();
+    viewHelper(id);
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// ============================================================================
+// PATCHED: Helper detail modal — now renders ALL onboarding fields.
+// Backwards-compatible with legacy helpers (falls back to h.documents.* fields
+// when new structured h.idProof / h.residencyProof / h.selfieUrl are absent).
+// ============================================================================
 function viewHelper(id) {
   const h = helpers.find(x => x.id === id); if (!h) return;
-  const locFull = `${h.state ? '🇮🇳 ' + h.state : ''}${h.district ? ' / ' + h.district : ''}${h.city ? ' / ' + h.city : ''}${h.village && h.village !== h.city ? ' / ' + h.village : ''}` || '—';
+
+  // Build location string with all available granularity.
+  const locFull = [
+    h.state ? '🇮🇳 ' + h.state : '',
+    h.district ? ' / ' + h.district : '',
+    h.city ? ' / ' + h.city : '',
+    h.village && h.village !== h.city ? ' / ' + h.village : '',
+    h.pincode ? ' · ' + h.pincode : '',
+  ].join('') || '—';
+
+  // Document fallbacks — new flow → legacy flow.
+  const selfieUrl = h.selfieUrl || h.documents?.selfie || null;
+  const idProofUrl = h.idProof?.url || h.documents?.aadhar || null;
+  const idProofType = h.idProof?.type || (h.documents?.aadhar ? 'aadhaar (legacy)' : null);
+  const idProofVerified = !!h.idProof?.verified;
+  const idVerifiedAt = h.idProof?.verifiedAt;
+  const idVerifiedBy = h.idProof?.verifiedBy;
+  const resProofUrl = h.residencyProof?.url || h.documents?.addressProof || null;
+  const resProofType = h.residencyProof?.type || (h.documents?.addressProof ? 'address proof (legacy)' : null);
+  const resProofVerified = !!h.residencyProof?.verified;
+  const resVerifiedAt = h.residencyProof?.verifiedAt;
+  const resVerifiedBy = h.residencyProof?.verifiedBy;
+
+  // Pretty labels for proof types.
+  const idTypeLabels = { aadhaar: 'Aadhaar Card', voter_id: 'Voter ID', driving_license: 'Driving License' };
+  const resTypeLabels = { aadhaar_address: 'Aadhaar (with address)', voter_id: 'Voter ID', electricity_bill: 'Electricity Bill', rental_agreement: 'Rental Agreement', bank_passbook: 'Bank Passbook' };
+  const idTypeLabel = idProofType ? (idTypeLabels[idProofType] || idProofType) : null;
+  const resTypeLabel = resProofType ? (resTypeLabels[resProofType] || resProofType) : null;
+
+  // Document card builder.
+  const renderDocCard = (label, kind, url, typeLabel, verified, verifiedAt, verifiedBy, allowVerify) => {
+    if (!url) {
+      return `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);text-align:center;color:var(--text-mute);font-size:13px;margin-bottom:10px"><div style="font-weight:700;color:var(--text-sec);margin-bottom:4px">${label}</div>⚠️ Not submitted (helper skipped this step or registered before document was required)</div>`;
+    }
+    const verifyBadge = verified ? `<span class="badge badge-verified">✅ Verified</span>` : `<span class="badge badge-pending">⏳ Pending review</span>`;
+    const verifyMeta = verified && verifiedAt ? `<div style="font-size:11px;color:var(--text-mute);margin-top:4px">Verified ${fDate(verifiedAt)} by ${verifiedBy || 'Admin'}</div>` : '';
+    const btnLabel = verified ? '✗ Un-verify' : '✓ Mark as Verified';
+    const btnClass = verified ? 'btn-ghost' : 'btn-success';
+    const verifyBtn = allowVerify ? `<div style="margin-top:10px;display:flex;gap:8px"><button class="btn ${btnClass} btn-sm" onclick="verifyHelperDocument('${h.id}','${kind}')">${btnLabel}</button></div>` : '';
+    return `<div style="padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px"><div style="flex:1"><div style="font-weight:700;color:var(--text);margin-bottom:2px">${label}</div><div style="font-size:12px;color:var(--text-sec)">Type: <strong>${typeLabel || 'Unknown'}</strong></div>${verifyMeta}</div>${verifyBadge}</div><a href="${url}" target="_blank" rel="noopener" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none"><img src="${url}" style="width:100%;max-height:280px;object-fit:contain;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">📄 Click to enlarge</div></a>${verifyBtn}</div>`;
+  };
+
+  // Declaration display.
+  let declarationHtml = '';
+  if (h.declaration) {
+    const consents = h.declaration.consents || {};
+    const items = [
+      { key: 'detailsAccurate',     label: 'Details, documents and photos are true and accurate' },
+      { key: 'agreePlatformRules',  label: 'Agreed to follow Connect platform rules and community guidelines' },
+      { key: 'noIllegalUse',        label: 'Will not use app for illegal, fraudulent, abusive or harmful activity' },
+      { key: 'communityHelpOnly',   label: 'Understands Connect is community help, not a hiring/marketplace service' },
+      { key: 'acceptConsequences',  label: 'Accepts consequences (suspension, ban, legal action) for misconduct' },
+      { key: 'agreeInvestigation',  label: 'Agrees details may be used for verification, audit, or investigation' },
+    ];
+    const allTicked = items.every(i => consents[i.key] === true);
+    declarationHtml = `<div style="padding:14px;border:1.5px solid var(--success);background:var(--success-light);border-radius:10px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-weight:800;color:var(--success)">⚖️ ${allTicked ? 'All 6 commitments accepted' : 'Some commitments NOT accepted'}</div><div style="font-size:12px;color:var(--text-sec);margin-top:2px">Version <code>${h.declaration.version || 'unknown'}</code> · Accepted ${fDate(h.declaration.acceptedAt)}</div></div><span class="badge badge-${allTicked ? 'verified' : 'rejected'}">${allTicked ? '✅ Complete' : '⚠️ Incomplete'}</span></div><div style="font-size:13px;line-height:1.7">${items.map((it, i) => `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.06)'}"><span style="font-size:16px;line-height:1">${consents[it.key] ? '✅' : '❌'}</span><span style="flex:1;color:${consents[it.key] ? 'var(--text)' : 'var(--danger)'}">${i + 1}. ${it.label}</span></div>`).join('')}</div></div>`;
+  } else {
+    declarationHtml = `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);font-size:13px;color:var(--text-mute);text-align:center">⚠️ No declaration on file (helper registered before declaration was required)</div>`;
+  }
+
+  // Skills / services chips.
+  const skillsChips = (h.skills || []).length > 0
+    ? (h.skills || []).map(s => `<span class="badge badge-primary" style="margin-right:4px;margin-bottom:4px;display:inline-block">${s}</span>`).join('')
+    : '—';
+
+  // Languages chips.
+  const langsChips = (h.languages || []).length > 0
+    ? (h.languages || []).map(l => `<span class="badge badge-info" style="margin-right:4px;margin-bottom:4px;display:inline-block">${l}</span>`).join('')
+    : '—';
+
+  // Header avatar (selfie circle).
+  const initials = (h.name || '?').substring(0, 2).toUpperCase();
+  const headerAvatar = selfieUrl
+    ? `<a href="${selfieUrl}" target="_blank" rel="noopener"><img src="${selfieUrl}" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid var(--primary)"/></a>`
+    : `<div style="width:80px;height:80px;border-radius:50%;background:var(--purple);color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:28px;border:3px solid var(--primary)">${initials}</div>`;
+
+  // Map link.
+  const mapLink = (h.lat && h.lng)
+    ? `<a href="https://www.google.com/maps?q=${h.lat},${h.lng}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700;text-decoration:none">📍 View on Google Maps</a>`
+    : '—';
+
+  // Selfie standalone card (no verify button — captured live).
+  const selfieCard = selfieUrl
+    ? `<div style="padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px"><div style="flex:1"><div style="font-weight:700;color:var(--text);margin-bottom:2px">🤳 Selfie</div><div style="font-size:12px;color:var(--text-sec)">Captured live during onboarding</div></div><span class="badge badge-info">📷 Live Capture</span></div><a href="${selfieUrl}" target="_blank" rel="noopener" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none"><img src="${selfieUrl}" style="width:100%;max-height:280px;object-fit:contain;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">📄 Click to enlarge</div></a></div>`
+    : `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);text-align:center;color:var(--text-mute);font-size:13px;margin-bottom:10px"><div style="font-weight:700;color:var(--text-sec);margin-bottom:4px">🤳 Selfie</div>⚠️ Not on file (helper registered before selfie was required)</div>`;
+
   showModal(
     `<div class="modal-header"><div class="modal-title">🛡️ Helper Profile</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      ${mf('Name', h.name || '—')}
+
+      <!-- Identity header card -->
+      <div style="display:flex;gap:16px;align-items:center;padding:16px;background:var(--bg-alt);border-radius:12px;margin-bottom:16px">
+        ${headerAvatar}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:20px;font-weight:800;color:var(--text);margin-bottom:4px">${h.name || 'Unnamed'}</div>
+          <div style="font-size:13px;color:var(--text-sec);margin-bottom:6px">${h.phone || '—'} · <code>${h.id.slice(0,12)}</code></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${h.isBlocked ? '<span class="badge badge-blocked">🚫 Blocked</span>' :
+              h.isSuspended ? '<span class="badge badge-suspended">⚠️ Suspended</span>' :
+              h.status === 'approved' ? '<span class="badge badge-active">✅ Approved</span>' :
+              h.status === 'rejected' ? '<span class="badge badge-rejected">❌ Rejected</span>' :
+              '<span class="badge badge-pending">⏳ Pending Review</span>'}
+            ${h.isOnline ? '<span class="badge badge-success">🟢 Online</span>' : '<span class="badge badge-gray">⚫ Offline</span>'}
+            ${idProofVerified && resProofVerified ? '<span class="badge badge-verified">✓ Fully Verified</span>' :
+              idProofVerified || resProofVerified ? '<span class="badge badge-warning">⚠️ Partially Verified</span>' :
+              '<span class="badge badge-unverified">— Not Verified</span>'}
+          </div>
+        </div>
+      </div>
+
+      <!-- Personal Info -->
+      <div class="modal-section-header">👤 Personal Info</div>
+      ${mf('Full Name', h.name || '—')}
+      ${mf('Age', h.age ? `${h.age} years` : '—')}
+      ${mf('Gender', h.gender ? h.gender.charAt(0).toUpperCase() + h.gender.slice(1) : '—')}
+      ${mf('Languages', langsChips)}
+      ${mf('Bio', h.bio || '<i style="color:var(--text-mute)">No bio provided</i>')}
       ${mf('Phone', h.phone || '—')}
-      ${mf('Helper ID', `<code>${h.id}</code>`)}
-      ${mf('Location', locFull)}
-      ${mf('Status', h.isBlocked ? '🚫 Blocked' : h.isSuspended ? '⚠️ Suspended' : (h.status || 'pending'))}
-      ${mf('Verified', h.isVerified ? '✅ Yes (Aadhaar)' : '—')}
-      ${mf('Online', h.isOnline ? '🟢 Online' : '⚫ Offline')}
-      ${mf('Skills', (h.skills||[]).join(', ') || '—')}
-      ${mf('Pricing', h.pricingType === 'free' ? 'Free' : `₹${h.hourlyRate || 0}/hr`)}
-      <div class="modal-section-header">Performance</div>
+      ${mf('Joined', fDate(h.createdAt))}
+
+      <!-- Location -->
+      <div class="modal-section-header">📍 Location</div>
+      ${mf('State', h.state || '—')}
+      ${mf('District', h.district || '—')}
+      ${mf('Village / Town', h.village || h.city || '—')}
+      ${mf('Pincode', h.pincode || '—')}
+      ${mf('Coordinates', mapLink)}
+      ${h.placeId ? mf('Google Place ID', `<code style="font-size:10px">${h.placeId}</code>`) : ''}
+
+      <!-- Services -->
+      <div class="modal-section-header">🛠️ Services Offered</div>
+      ${mf('Selected Services', skillsChips)}
+      ${mf('Pricing', h.pricingType === 'free' ? '💚 Free' : `💰 ₹${h.hourlyRate || 0}/hr`)}
+
+      <!-- Document Verification -->
+      <div class="modal-section-header">📄 Document Verification</div>
+      ${selfieCard}
+      ${renderDocCard('🆔 Identity Proof', 'idProof', idProofUrl, idTypeLabel, idProofVerified, idVerifiedAt, idVerifiedBy, true)}
+      ${renderDocCard('🏠 Residency Proof', 'residencyProof', resProofUrl, resTypeLabel, resProofVerified, resVerifiedAt, resVerifiedBy, true)}
+
+      <!-- Declaration -->
+      <div class="modal-section-header">⚖️ Legal Declaration</div>
+      ${declarationHtml}
+
+      <!-- Performance -->
+      <div class="modal-section-header">📊 Performance</div>
       ${mf('Rating', h.rating ? `⭐ ${Number(h.rating).toFixed(1)} (${h.totalRatings || 0} reviews)` : 'No ratings yet')}
       ${mf('Completed Tasks', h.totalRequests || 0)}
+      ${mf('Total Earnings', `₹${Number(h.totalEarnings || 0).toLocaleString('en-IN')}`)}
       ${mf('Community Trust Index', `${h.communityTrustIndex || 50}/100`)}
       ${mf('Repeat Users', h.repeatUsers || 0)}
       ${h.cancellationRate ? mf('Cancellation Rate', `${Math.round((h.cancellationRate || 0) * 100)}%`) : ''}
+
+      <!-- Moderation Notes (only if any) -->
+      ${h.suspensionReason || h.blockReason || h.warningReason ? `
+        <div class="modal-section-header">⚠️ Moderation Notes</div>
+        ${h.warningReason ? mf('Warning', `${h.warningCategory || ''} — ${h.warningReason}`) : ''}
+        ${h.suspensionReason ? mf('Suspension', `${h.suspensionReasonCategory || ''} — ${h.suspensionReason}`) : ''}
+        ${h.blockReason ? mf('Block', `${h.blockReasonCategory || ''} — ${h.blockReason}`) : ''}
+      ` : ''}
+
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
@@ -1345,7 +1532,10 @@ function renderVerification() {
     `<table class="table"><thead><tr><th>Helper</th><th>Phone</th><th>Method</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(h => {
       const s = h.verificationStatus || 'not_submitted';
       const badge = `<span class="badge badge-${s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : 'pending'}">${s}</span>`;
-      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${h.verificationMethod || 'Aadhaar'}</td><td>${badge}</td><td>${fDate(h.verifiedAt || h.createdAt)}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">View</button></td></tr>`;
+      // Show actual ID type if available, otherwise legacy method
+      const idLabels = { aadhaar: 'Aadhaar', voter_id: 'Voter ID', driving_license: 'Driving License' };
+      const method = h.idProof?.type ? (idLabels[h.idProof.type] || h.idProof.type) : (h.verificationMethod || 'Aadhaar');
+      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${method}</td><td>${badge}</td><td>${fDate(h.verifiedAt || h.createdAt)}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">View</button></td></tr>`;
     }).join('') + `</tbody></table>`;
 }
 
@@ -1482,7 +1672,6 @@ function requestAlertInfo(id) {
   });
 }
 </script>
-
 <script>
 // ── Reports ──
 function renderReports() {
@@ -2470,3 +2659,4 @@ function empty(emoji, title, sub) {
 </script>
 
 </body>
+</html>
