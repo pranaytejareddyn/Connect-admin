@@ -361,7 +361,10 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
           <div class="filter-bar" id="helper-filters">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="pending">⏳ Pending</button>
+            <button class="filter-btn" data-filter="info_requested">❓ Info Requested</button>
+            <button class="filter-btn" data-filter="appeal_submitted">📝 Appeal Submitted</button>
             <button class="filter-btn" data-filter="approved">✅ Active</button>
+            <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
             <button class="filter-btn" data-filter="suspended">⚠️ Suspended</button>
             <button class="filter-btn" data-filter="blocked">🚫 Blocked</button>
             <button class="filter-btn" data-filter="top_rated">🏆 Top Rated</button>
@@ -1238,6 +1241,9 @@ function renderHelpers() {
   let f = helpers;
   if (helperFilter === 'pending') f = f.filter(h => (h.status||'pending') === 'pending');
   else if (helperFilter === 'approved') f = f.filter(h => h.status === 'approved' && !h.isBlocked && !h.isSuspended);
+  else if (helperFilter === 'rejected') f = f.filter(h => h.status === 'rejected');
+  else if (helperFilter === 'info_requested') f = f.filter(h => h.status === 'info_requested');
+  else if (helperFilter === 'appeal_submitted') f = f.filter(h => h.status === 'appeal_submitted' || h.status === 'appeal_under_review');
   else if (helperFilter === 'suspended') f = f.filter(h => h.isSuspended);
   else if (helperFilter === 'blocked') f = f.filter(h => h.isBlocked);
   else if (helperFilter === 'top_rated') f = f.filter(h => (h.rating || 0) >= 4.5 && (h.totalRatings || 0) >= 3);
@@ -1264,11 +1270,15 @@ function renderHelpers() {
       const statusBadge = h.isBlocked ? '<span class="badge badge-blocked">🚫 Blocked</span>' :
         h.isSuspended ? '<span class="badge badge-suspended">⚠️ Suspended</span>' :
         h.status === 'approved' ? '<span class="badge badge-active">✅ Active</span>' :
-        h.status === 'rejected' ? '<span class="badge badge-rejected">❌ Rejected</span>' : '<span class="badge badge-pending">⏳ Pending</span>';
-      // Verification status — fully verified if both ID and residency are verified
-      const fullyVerified = h.idProof?.verified && h.residencyProof?.verified;
-      const partVerified = h.idProof?.verified || h.residencyProof?.verified || h.isVerified || h.verificationStatus === 'verified';
-      const verifyBadge = fullyVerified ? '<span class="badge badge-verified">✓ Full</span>' :
+        h.status === 'rejected' ? '<span class="badge badge-rejected">❌ Rejected</span>' :
+        h.status === 'info_requested' ? '<span class="badge badge-warning">❓ Info Requested</span>' :
+        (h.status === 'appeal_submitted' || h.status === 'appeal_under_review') ? '<span class="badge badge-info">📝 Appeal Submitted</span>' :
+        '<span class="badge badge-pending">⏳ Pending</span>';
+      // Verification status — admin's overall isVerified flag takes precedence;
+      // fall back to per-doc verification flags for legacy helpers.
+      const fullyVerified = h.isVerified || (h.idProof?.verified && h.residencyProof?.verified);
+      const partVerified = !fullyVerified && (h.idProof?.verified || h.residencyProof?.verified || h.verificationStatus === 'verified');
+      const verifyBadge = fullyVerified ? '<span class="badge badge-verified">✓ Verified</span>' :
         partVerified ? '<span class="badge badge-warning">⚠ Partial</span>' :
         '<span class="badge badge-unverified">—</span>';
       const online = h.isOnline ? ' 🟢' : '';
@@ -1481,6 +1491,89 @@ function viewHelper(id) {
       ${mf('Repeat Users', h.repeatUsers || 0)}
       ${h.cancellationRate ? mf('Cancellation Rate', `${Math.round((h.cancellationRate || 0) * 100)}%`) : ''}
 
+      <!-- Application Status (rejection / appeal / info-request) -->
+      ${h.status === 'rejected' || h.status === 'info_requested' || h.status === 'appeal_submitted' || h.status === 'appeal_under_review' || h.rejectionReason ? `
+        <div class="modal-section-header">📋 Application Status</div>
+        ${h.status === 'rejected' || h.rejectionReason ? `
+          <div style="padding:14px;border:1.5px solid var(--danger);background:var(--danger-light);border-radius:10px;margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="font-weight:800;color:var(--danger)">❌ Application Rejected</div>
+              ${h.appealCount ? `<span class="badge badge-info" style="font-size:10px">Resubmission #${h.appealCount}</span>` : ''}
+            </div>
+            ${mf('Rejection Category', h.rejectionCategory || '—')}
+            ${mf('Rejection Reason', h.rejectionReason || '—')}
+            ${mf('Rejected On', fDate(h.rejectedAt))}
+            ${h.rejectedBy ? mf('Rejected By', h.rejectedBy) : ''}
+            ${h.rejectionNotes ? mf('Internal Notes', `<i>${h.rejectionNotes}</i>`) : ''}
+          </div>
+        ` : ''}
+
+        <!-- Open info-request (admin asked, awaiting helper response) -->
+        ${h.status === 'info_requested' && h.infoRequestNote ? `
+          <div style="padding:14px;border:1.5px solid var(--warning);background:var(--warning-light);border-radius:10px;margin-bottom:12px">
+            <div style="font-weight:800;color:var(--warning);margin-bottom:8px">❓ Awaiting Helper Response</div>
+            ${mf('Message Sent', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.infoRequestNote}</div>`)}
+            ${Array.isArray(h.infoRequestRequiredDocs) && h.infoRequestRequiredDocs.length > 0 ? mf('Required Documents', `<ul style="margin:4px 0 0 0;padding-left:18px">${h.infoRequestRequiredDocs.map(d => `<li style="margin-bottom:2px">${d}</li>`).join('')}</ul>`) : ''}
+            ${mf('Sent On', fDate(h.infoRequestedAt))}
+            ${h.infoRequestedBy ? mf('Sent By', h.infoRequestedBy) : ''}
+          </div>
+        ` : ''}
+
+        <!-- Awaiting appeal review (helper resubmitted, no admin decision yet) -->
+        ${(h.status === 'appeal_submitted' || h.status === 'appeal_under_review') ? `
+          <div style="padding:14px;border:1.5px solid var(--info);background:var(--info-light);border-radius:10px;margin-bottom:12px">
+            <div style="font-weight:800;color:var(--info)">⏳ Awaiting Appeal Review</div>
+          </div>
+        ` : ''}
+
+        <!-- Helper's info response (after responding to an info-request) -->
+        ${h.infoResponse ? `
+          <div style="padding:14px;border:1.5px solid var(--success);background:var(--success-light);border-radius:10px;margin-bottom:12px">
+            <div style="font-weight:800;color:var(--success);margin-bottom:8px">✓ Helper's Response</div>
+            ${mf('Note from Helper', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.infoResponse.note || '—'}</div>`)}
+            ${mf('Submitted', fDate(h.infoResponse.submittedAt))}
+            ${h.infoResponse.newDocs ? `
+              <div style="margin-top:10px"><strong style="font-size:12px;color:var(--text-sec);text-transform:uppercase;letter-spacing:0.5px">New Documents</strong></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
+                ${h.infoResponse.newDocs.idProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🆔 New ID</div><a href="${h.infoResponse.newDocs.idProofUrl}" target="_blank" rel="noopener"><img src="${h.infoResponse.newDocs.idProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
+                ${h.infoResponse.newDocs.residencyProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🏠 New Residency</div><a href="${h.infoResponse.newDocs.residencyProofUrl}" target="_blank" rel="noopener"><img src="${h.infoResponse.newDocs.residencyProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
+                ${h.infoResponse.newDocs.selfieUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🤳 New Selfie</div><a href="${h.infoResponse.newDocs.selfieUrl}" target="_blank" rel="noopener"><img src="${h.infoResponse.newDocs.selfieUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
+              </div>
+            ` : ''}
+          </div>
+        ` : ''}
+
+        ${h.latestAppeal ? `
+          <div style="padding:14px;border:1.5px solid var(--info);background:var(--info-light);border-radius:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div style="font-weight:800;color:var(--info)">📝 Latest Appeal · <code>${h.latestAppeal.appealId || '—'}</code></div>
+              <span class="badge badge-${h.latestAppeal.status === 'approved' ? 'verified' : h.latestAppeal.status === 'rejected' ? 'rejected' : 'pending'}">${h.latestAppeal.status || 'submitted'}</span>
+            </div>
+            ${mf('Submitted', fDate(h.latestAppeal.submittedAt))}
+            ${mf('Helper Explanation', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.latestAppeal.explanation || '—'}</div>`)}
+            ${h.latestAppeal.newDocs ? `
+              <div style="margin-top:10px"><strong style="font-size:12px;color:var(--text-sec);text-transform:uppercase;letter-spacing:0.5px">Newly Uploaded Documents</strong></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
+                ${h.latestAppeal.newDocs.idProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🆔 New ID: ${h.latestAppeal.newDocs.idProofType || ''}</div><a href="${h.latestAppeal.newDocs.idProofUrl}" target="_blank" rel="noopener"><img src="${h.latestAppeal.newDocs.idProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
+                ${h.latestAppeal.newDocs.residencyProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🏠 New Residency: ${h.latestAppeal.newDocs.residencyProofType || ''}</div><a href="${h.latestAppeal.newDocs.residencyProofUrl}" target="_blank" rel="noopener"><img src="${h.latestAppeal.newDocs.residencyProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
+              </div>
+            ` : ''}
+            ${h.latestAppeal.adminReply ? `<div style="margin-top:10px;padding:10px;background:var(--surface);border-radius:8px;border-left:3px solid var(--info)"><strong style="font-size:11px;color:var(--info);text-transform:uppercase;letter-spacing:0.5px">Your Previous Reply</strong><div style="margin-top:4px;font-size:13px">${h.latestAppeal.adminReply}</div><div style="font-size:11px;color:var(--text-mute);margin-top:4px">— ${h.latestAppeal.decidedBy || 'Admin'} · ${fDate(h.latestAppeal.decidedAt)}</div></div>` : ''}
+            ${(h.status === 'appeal_submitted' || h.status === 'appeal_under_review') ? `
+              <div style="margin-top:14px;padding:12px;background:var(--surface);border-radius:8px;border:1px solid var(--border)">
+                <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:13px">⚖️ Decide on this appeal</div>
+                <div class="modal-field"><textarea id="ha-reply" class="form-textarea" placeholder="Reply to the helper (will be visible to them)..." maxlength="500"></textarea></div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-success btn-sm" onclick="decideHelperAppeal('${h.id}','approved')">✅ Approve & Activate</button>
+                  <button class="btn btn-danger btn-sm" onclick="decideHelperAppeal('${h.id}','rejected')">❌ Reject Appeal</button>
+                  <button class="btn btn-warning btn-sm" onclick="decideHelperAppeal('${h.id}','info_requested')">❓ Request More Info</button>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        ` : ''}
+      ` : ''}
+
       <!-- Moderation Notes (only if any) -->
       ${h.suspensionReason || h.blockReason || h.warningReason ? `
         <div class="modal-section-header">⚠️ Moderation Notes</div>
@@ -1492,10 +1585,14 @@ function viewHelper(id) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
-      ${h.status === 'pending' ?
+      ${h.status === 'pending' || h.status === 'info_requested' || h.status === 'appeal_submitted' || h.status === 'appeal_under_review' ?
         `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','approve')">✅ Approve</button>
+         <button class="btn btn-warning btn-sm" onclick="showInfoRequestModal('${h.id}','${(h.name||h.phone||'').replace(/'/g,"\\'")}')">❓ Request More Info</button>
          <button class="btn btn-danger btn-sm" onclick="helperAction('${h.id}','reject')">❌ Reject</button>` :
-        `${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction('${h.id}','suspend')">⚠️ Suspend</button>`}
+        `${h.isVerified
+            ? `<button class="btn btn-warning btn-sm" onclick="helperAction('${h.id}','unverify')">⚪ Mark Unverified</button>`
+            : `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','verify')">✓ Mark Verified</button>`}
+         ${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction('${h.id}','suspend')">⚠️ Suspend</button>`}
          ${h.isBlocked ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="helperAction('${h.id}','block')">🚫 Block</button>`}`}
     </div>`
   );
@@ -1504,21 +1601,258 @@ function viewHelper(id) {
 function helperAction(id, action) {
   const h = helpers.find(x => x.id === id); if (!h) return;
   if (['warn', 'suspend', 'block'].includes(action)) { showModerationModal('helper', id, action, h.name || h.phone); return; }
+  if (action === 'reject') { showRejectionModal(id, h.name || h.phone); return; }
   if (!confirm(`${action} helper "${h.name || h.phone}"?`)) return;
   const updates = {};
-  if (action === 'approve') updates.status = 'approved';
+  if (action === 'approve') {
+    updates.status = 'approved';
+    // Clear pending info-request fields if any so they don't linger
+    updates.infoRequestNote = '';
+    updates.infoRequestRequiredDocs = [];
+  }
   else if (action === 'reject') updates.status = 'rejected';
   else if (action === 'unblock') { updates.isBlocked = false; updates.blockReason = ''; }
   else if (action === 'unsuspend') { updates.isSuspended = false; updates.suspensionReason = ''; }
+  else if (action === 'verify') {
+    updates.isVerified = true;
+    updates.verifiedAt = firebase.firestore.FieldValue.serverTimestamp();
+    updates.verifiedBy = (currentAdmin && currentAdmin.email) || 'Admin';
+  }
+  else if (action === 'unverify') {
+    updates.isVerified = false;
+    updates.verifiedAt = firebase.firestore.FieldValue.delete();
+    updates.verifiedBy = firebase.firestore.FieldValue.delete();
+  }
   db.collection('helpers').doc(id).update(updates).then(() => {
     Object.assign(h, updates);
     logAudit(`Helper ${action}`, `${h.name || h.phone} (${id.slice(0,8)})`);
     const msg = action === 'approve' ? '🎉 Your helper account has been approved! You can now receive requests.' :
                 action === 'reject' ? '❌ Your helper application was rejected.' :
-                action === 'unblock' ? '✅ Your account has been unblocked.' : '✅ Your account has been reactivated.';
+                action === 'unblock' ? '✅ Your account has been unblocked.' :
+                action === 'unsuspend' ? '✅ Your account has been reactivated.' :
+                action === 'verify' ? '✓ Your profile has been verified by admin.' :
+                action === 'unverify' ? 'Your verified status has been removed by admin.' :
+                '✅ Action complete.';
     db.collection('notifications').add({ userId: id, type: 'admin_action', title: 'Admin Update', body: msg, data: {}, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
     showToast(`✅ Helper ${action}ed`, 'success');
     closeModal(); renderHelpers(); updateOverview();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// ============================================================================
+// PATCHED: Show "Request More Info" modal — admin captures a clear question and
+// optionally a list of required documents. Sets helper.status='info_requested'
+// so the mobile-side gate locks the helper out and shows the message.
+// ============================================================================
+function showInfoRequestModal(helperId, helperName) {
+  showModal(
+    `<div class="modal-header"><div class="modal-title">❓ Request More Information</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div style="background:var(--info-light);padding:12px;border-radius:8px;margin-bottom:16px;border-left:3px solid var(--info)"><div style="font-size:12px;color:var(--info);font-weight:700">ℹ️ The helper will be locked out of the app and will see this message. They can upload missing/corrected documents and resubmit.</div></div>
+      <div class="modal-field"><div class="modal-label">Target</div><div class="modal-value"><strong>${helperName}</strong> <code>${helperId.slice(0,12)}</code></div></div>
+      <div class="modal-field"><div class="modal-label">Message * (visible to helper)</div><textarea id="ir-message" class="form-textarea" placeholder="e.g. We need a clearer photo of the back side of your Aadhaar card. Please retake and resubmit." maxlength="600"></textarea></div>
+      <div class="modal-field"><div class="modal-label">Required Documents (optional, one per line)</div><textarea id="ir-docs" class="form-textarea" placeholder="e.g.&#10;Clear photo of Aadhaar card (back side)&#10;Recent electricity bill" maxlength="500"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-warning" onclick="executeInfoRequest('${helperId}')">❓ Send Request</button>
+    </div>`
+  );
+}
+
+function executeInfoRequest(helperId) {
+  const message = document.getElementById('ir-message').value.trim();
+  const docsRaw = document.getElementById('ir-docs').value.trim();
+  if (!message || message.length < 10) {
+    showToast('Please write a clear message (at least 10 characters)', 'error');
+    return;
+  }
+  const requiredDocs = docsRaw ? docsRaw.split('\n').map(s => s.trim()).filter(Boolean) : [];
+
+  const h = helpers.find(x => x.id === helperId); if (!h) return;
+  const adminEmail = (currentAdmin && currentAdmin.email) || 'Admin';
+  const updates = {
+    status: 'info_requested',
+    infoRequestNote: message,
+    infoRequestRequiredDocs: requiredDocs,
+    infoRequestedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    infoRequestedBy: adminEmail,
+    // Clear any previous infoResponse so the helper's new submission is fresh
+    infoResponse: firebase.firestore.FieldValue.delete(),
+  };
+  db.collection('helpers').doc(helperId).update(updates).then(() => {
+    Object.assign(h, updates);
+    logAudit('Request more info', `${h.name || h.phone} — ${message.substring(0, 80)}`);
+    db.collection('notifications').add({
+      userId: helperId,
+      type: 'helper_info_requested',
+      title: '❓ More Information Needed',
+      body: message.substring(0, 200),
+      data: { screen: 'AccountStatus' },
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    showToast('✅ Info request sent. Helper notified.', 'success');
+    closeModal();
+    renderHelpers();
+    updateOverview();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// ============================================================================
+// PATCHED: Rejection modal — captures category + detailed reason that the
+// helper will see in the mobile app on the Application Rejected screen.
+// ============================================================================
+function showRejectionModal(helperId, helperName) {
+  const categories = [
+    'Documents unclear or unreadable',
+    'Identity proof invalid or expired',
+    'Residency proof does not match registered address',
+    'Selfie quality issue',
+    'Information mismatch',
+    'Suspected fraudulent application',
+    'Below minimum age requirement',
+    'Service area not yet active',
+    'Duplicate application',
+    'Other',
+  ];
+  showModal(
+    `<div class="modal-header"><div class="modal-title">📋 Reject Helper Application</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div style="background:var(--danger-light);padding:12px;border-radius:8px;margin-bottom:16px;border-left:3px solid var(--danger)"><div style="font-size:12px;color:var(--danger);font-weight:700">⚠️ The helper will see this reason on their phone immediately. Be specific so they know exactly what to fix.</div></div>
+      <div class="modal-field"><div class="modal-label">Target</div><div class="modal-value"><strong>${helperName}</strong> <code>${helperId.slice(0,12)}</code></div></div>
+      <div class="modal-field"><div class="modal-label">Category *</div><select id="rj-category" class="form-select" required><option value="">Select category...</option>${categories.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
+      <div class="modal-field"><div class="modal-label">Detailed Reason * (visible to helper)</div><textarea id="rj-reason" class="form-textarea" placeholder="e.g. Your Aadhaar photo is too dark to read. Please retake in better light and resubmit." maxlength="500"></textarea></div>
+      <div class="modal-field"><div class="modal-label">Internal Notes (admin only)</div><textarea id="rj-notes" class="form-textarea" placeholder="Internal notes for other admins..." maxlength="500"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="executeRejection('${helperId}')">📋 Reject Application</button>
+    </div>`
+  );
+}
+
+function executeRejection(helperId) {
+  const category = document.getElementById('rj-category').value;
+  const reason = document.getElementById('rj-reason').value.trim();
+  const notes = document.getElementById('rj-notes').value.trim();
+  if (!category) { showToast('Please select a category', 'error'); return; }
+  if (!reason || reason.length < 10) { showToast('Please write a detailed reason (at least 10 characters)', 'error'); return; }
+
+  const h = helpers.find(x => x.id === helperId); if (!h) return;
+  const updates = {
+    status: 'rejected',
+    rejectionCategory: category,
+    rejectionReason: reason,
+    rejectionNotes: notes,
+    rejectedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    rejectedBy: currentAdmin.email || 'Admin',
+  };
+  db.collection('helpers').doc(helperId).update(updates).then(() => {
+    Object.assign(h, updates);
+    logAudit('Reject helper application', `${h.name || h.phone} — ${category}: ${reason.substring(0, 80)}`);
+    db.collection('notifications').add({
+      userId: helperId,
+      type: 'helper_application_rejected',
+      title: '📋 Application Not Approved',
+      body: `Your helper application was reviewed and not approved. Reason: ${reason.substring(0, 100)}. You can resubmit with corrected information.`,
+      data: { screen: 'AccountStatus' },
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    showToast('✅ Application rejected. Helper notified.', 'success');
+    closeModal();
+    renderHelpers();
+    updateOverview();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// ============================================================================
+// PATCHED: Decide on a helper's appeal/resubmission. Three outcomes:
+//   - approved        → status flips to 'approved', helper unlocked
+//   - rejected        → status flips back to 'rejected' (helper can appeal again)
+//   - info_requested  → status stays 'appeal_submitted', helper sees admin note
+// Updates BOTH helpers/{uid} (so the mobile app gate flips) and the matching
+// appeals/{appealId} record (so the admin Appeals page reflects the decision).
+// ============================================================================
+function decideHelperAppeal(helperId, decision) {
+  const h = helpers.find(x => x.id === helperId); if (!h) return;
+  if (!h.latestAppeal) { showToast('No active appeal to decide on', 'error'); return; }
+  const reply = (document.getElementById('ha-reply')?.value || '').trim();
+  if (decision !== 'approved' && reply.length < 10) {
+    showToast('Please write a reply (at least 10 characters)', 'error');
+    return;
+  }
+  const confirmMsg = decision === 'approved'
+    ? `Approve this appeal? "${h.name || h.phone}" will be activated as a helper.`
+    : decision === 'rejected'
+      ? `Reject this appeal? "${h.name || h.phone}" can appeal again.`
+      : `Send a request for more info to "${h.name || h.phone}"?`;
+  if (!confirm(confirmMsg)) return;
+
+  const adminEmail = currentAdmin.email || 'Admin';
+  const helperUpdates = {
+    'latestAppeal.status': decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'submitted',
+    'latestAppeal.adminReply': reply,
+    'latestAppeal.decidedAt': firebase.firestore.FieldValue.serverTimestamp(),
+    'latestAppeal.decidedBy': adminEmail,
+  };
+  if (decision === 'approved') {
+    helperUpdates.status = 'approved';
+    helperUpdates.rejectionReason = '';
+    helperUpdates.rejectionCategory = '';
+    helperUpdates.reinstatedAt = firebase.firestore.FieldValue.serverTimestamp();
+  } else if (decision === 'rejected') {
+    helperUpdates.status = 'rejected';
+    // Latest reason becomes this rejection reason so the helper sees what to fix.
+    if (reply) helperUpdates.rejectionReason = reply;
+  } else if (decision === 'info_requested') {
+    // Promote to first-class info_requested status so mobile shows the proper UI.
+    helperUpdates.status = 'info_requested';
+    helperUpdates.infoRequestNote = reply;
+    helperUpdates.infoRequestedAt = firebase.firestore.FieldValue.serverTimestamp();
+    helperUpdates.infoRequestedBy = adminEmail;
+  }
+
+  // Find the appeal doc in the appeals collection so we update both records.
+  const appealId = h.latestAppeal.appealId;
+  const appealQuery = db.collection('appeals').where('appealId', '==', appealId).limit(1);
+
+  Promise.all([
+    db.collection('helpers').doc(helperId).update(helperUpdates),
+    appealQuery.get().then(snap => {
+      if (snap.empty) return Promise.resolve();
+      const appealRef = snap.docs[0].ref;
+      const appealStatusMap = { approved: 'approved', rejected: 'rejected', info_requested: 'submitted' };
+      return appealRef.update({
+        status: appealStatusMap[decision],
+        adminReply: reply,
+        repliedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        repliedBy: adminEmail,
+      });
+    }),
+  ]).then(() => {
+    // Notify the helper.
+    const notifConfig = {
+      approved: { title: '🎉 Appeal Approved!', body: `Great news — your application is approved. You can now use Connect as a helper. ${reply ? 'Admin note: ' + reply.substring(0, 100) : ''}` },
+      rejected: { title: '❌ Appeal Rejected', body: `Your appeal was rejected. Reason: ${reply.substring(0, 150)}` },
+      info_requested: { title: '❓ More Information Needed', body: reply.substring(0, 200) },
+    };
+    const nc = notifConfig[decision];
+    db.collection('notifications').add({
+      userId: helperId,
+      type: 'helper_appeal_decision',
+      title: nc.title,
+      body: nc.body,
+      data: { screen: 'AccountStatus' },
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    logAudit(`Helper appeal ${decision}`, `${h.name || h.phone} (#${appealId}) — ${reply.substring(0, 60)}`);
+    showToast(`✅ Appeal ${decision === 'info_requested' ? 'response sent' : decision}. Helper notified.`, 'success');
+    closeModal();
+    loadHelpers().then(() => { renderHelpers(); updateOverview(); });
+    loadAppeals().then(renderAppeals);
   }).catch(e => showToast('Error: ' + e.message, 'error'));
 }
 
