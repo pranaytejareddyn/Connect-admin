@@ -388,6 +388,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
           <div class="filter-bar" id="verification-filters">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="pending">⏳ Pending</button>
+            <button class="filter-btn" data-filter="info_requested">❓ Info Requested</button>
             <button class="filter-btn" data-filter="verified">✅ Verified</button>
             <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
           </div>
@@ -1491,6 +1492,50 @@ function viewHelper(id) {
       ${mf('Repeat Users', h.repeatUsers || 0)}
       ${h.cancellationRate ? mf('Cancellation Rate', `${Math.round((h.cancellationRate || 0) * 100)}%`) : ''}
 
+      <!-- Get-Verified Verification Request (helper-initiated; separate from onboarding rejection) -->
+      ${h.verificationRequest ? `
+        <div class="modal-section-header">🛡️ Verification Request</div>
+        <div style="padding:14px;border:1.5px solid var(${h.verificationRequest.status === 'pending' ? '--info' : h.verificationRequest.status === 'approved' ? '--success' : h.verificationRequest.status === 'rejected' ? '--danger' : '--warning'});background:var(${h.verificationRequest.status === 'pending' ? '--info-light' : h.verificationRequest.status === 'approved' ? '--success-light' : h.verificationRequest.status === 'rejected' ? '--danger-light' : '--warning-light'});border-radius:10px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="font-weight:800;color:var(${h.verificationRequest.status === 'pending' ? '--info' : h.verificationRequest.status === 'approved' ? '--success' : h.verificationRequest.status === 'rejected' ? '--danger' : '--warning'})">${h.verificationRequest.status === 'pending' ? '⏳ Pending Review' : h.verificationRequest.status === 'approved' ? '✓ Approved' : h.verificationRequest.status === 'rejected' ? '❌ Rejected' : '❓ Info Requested'}</div>
+            ${h.verificationRequest.rejectionCount ? `<span class="badge badge-info" style="font-size:10px">Submission #${h.verificationRequest.rejectionCount + 1}</span>` : ''}
+          </div>
+          ${mf('Submitted', fDate(h.verificationRequest.submittedAt))}
+          ${h.verificationRequest.reviewedAt ? mf('Reviewed', fDate(h.verificationRequest.reviewedAt)) : ''}
+          ${h.verificationRequest.reviewedBy ? mf('Reviewed By', h.verificationRequest.reviewedBy) : ''}
+          ${h.verificationRequest.adminNote ? mf('Your Note to Helper', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.verificationRequest.adminNote}</div>`) : ''}
+
+          <!-- Submitted documents -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+            ${h.verificationRequest.idProofUrl ? `
+              <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+                <div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🆔 Identity: ${h.verificationRequest.idProofType || ''}</div>
+                <a href="${h.verificationRequest.idProofUrl}" target="_blank" rel="noopener"><img src="${h.verificationRequest.idProofUrl}" style="width:100%;max-height:180px;object-fit:contain;display:block"/></a>
+              </div>
+            ` : ''}
+            ${h.verificationRequest.addressProofUrl ? `
+              <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+                <div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🏠 Address: ${h.verificationRequest.addressProofType || ''}</div>
+                <a href="${h.verificationRequest.addressProofUrl}" target="_blank" rel="noopener"><img src="${h.verificationRequest.addressProofUrl}" style="width:100%;max-height:180px;object-fit:contain;display:block"/></a>
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- Decision controls (only when pending) -->
+          ${h.verificationRequest.status === 'pending' ? `
+            <div style="margin-top:14px;padding:12px;background:var(--surface);border-radius:8px;border:1px solid var(--border)">
+              <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:13px">⚖️ Decide on this request</div>
+              <div class="modal-field"><textarea id="vr-note" class="form-textarea" placeholder="Note to helper (required for reject / request more info)..." maxlength="500"></textarea></div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-success btn-sm" onclick="decideVerificationRequest('${h.id}','approved')">✅ Approve & Mark Verified</button>
+                <button class="btn btn-danger btn-sm" onclick="decideVerificationRequest('${h.id}','rejected')">❌ Reject</button>
+                <button class="btn btn-warning btn-sm" onclick="decideVerificationRequest('${h.id}','info_requested')">❓ Request More Info</button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
+
       <!-- Application Status (rejection / appeal / info-request) -->
       ${h.status === 'rejected' || h.status === 'info_requested' || h.status === 'appeal_submitted' || h.status === 'appeal_under_review' || h.rejectionReason ? `
         <div class="modal-section-header">📋 Application Status</div>
@@ -1856,20 +1901,111 @@ function decideHelperAppeal(helperId, decision) {
   }).catch(e => showToast('Error: ' + e.message, 'error'));
 }
 
+// ── Verification (helper-initiated "Get Verified" flow) ──
+// Decide on a helper.verificationRequest. Three outcomes:
+//   approved        → helper.isVerified=true, verificationRequest.status='approved'
+//   rejected        → verificationRequest.status='rejected', helper sees the note + can resubmit
+//   info_requested  → verificationRequest.status='info_requested', helper updates and resubmits
+// In all cases, helper.status (their primary application status) is unchanged.
+function decideVerificationRequest(helperId, decision) {
+  const h = helpers.find(x => x.id === helperId); if (!h) return;
+  if (!h.verificationRequest) { showToast('No verification request to decide on', 'error'); return; }
+  if (h.verificationRequest.status !== 'pending') {
+    showToast('This request has already been decided', 'error');
+    return;
+  }
+  const note = (document.getElementById('vr-note')?.value || '').trim();
+  if (decision !== 'approved' && note.length < 10) {
+    showToast('Please write a note (at least 10 characters)', 'error');
+    return;
+  }
+  const confirmMsg = decision === 'approved'
+    ? `Approve verification for "${h.name || h.phone}"? They will get the verified badge.`
+    : decision === 'rejected'
+      ? `Reject this verification request? "${h.name || h.phone}" can resubmit with corrected documents.`
+      : `Send a request for more info to "${h.name || h.phone}"?`;
+  if (!confirm(confirmMsg)) return;
+
+  const adminEmail = (currentAdmin && currentAdmin.email) || 'Admin';
+  const updates = {
+    'verificationRequest.status': decision,
+    'verificationRequest.adminNote': note,
+    'verificationRequest.reviewedAt': firebase.firestore.FieldValue.serverTimestamp(),
+    'verificationRequest.reviewedBy': adminEmail,
+  };
+
+  // On approval, also flip the top-level isVerified flag so the badge appears
+  // immediately across the app and the helper-list view.
+  if (decision === 'approved') {
+    updates.isVerified = true;
+    updates.verifiedAt = firebase.firestore.FieldValue.serverTimestamp();
+    updates.verifiedBy = adminEmail;
+  }
+
+  db.collection('helpers').doc(helperId).update(updates).then(() => {
+    // Update local cache so UI reflects changes without a full reload.
+    h.verificationRequest = Object.assign({}, h.verificationRequest, {
+      status: decision, adminNote: note, reviewedBy: adminEmail,
+    });
+    if (decision === 'approved') { h.isVerified = true; h.verifiedBy = adminEmail; }
+
+    // Notification to helper
+    const notifConfig = {
+      approved: { title: '✅ Verification Approved!', body: 'Your account has been verified by our team. The verified badge now appears on your profile.' },
+      rejected: { title: '❌ Verification Rejected', body: `Your verification was rejected. Reason: ${note.substring(0, 150)}` },
+      info_requested: { title: '❓ More Information Needed', body: note.substring(0, 200) },
+    };
+    const nc = notifConfig[decision];
+    db.collection('notifications').add({
+      userId: helperId,
+      type: 'verification_decision',
+      title: nc.title,
+      body: nc.body,
+      data: { screen: 'HelperVerification' },
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    logAudit(`Verification ${decision}`, `${h.name || h.phone} — ${note.substring(0, 60)}`);
+    showToast(`✅ Verification ${decision === 'info_requested' ? 'info request sent' : decision}. Helper notified.`, 'success');
+    closeModal();
+    renderHelpers();
+    renderVerification();
+    updateOverview();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
 // ── Verification ──
 function renderVerification() {
-  let f = helpers.filter(h => h.verificationStatus || h.status === 'pending');
-  if (verificationFilter === 'pending') f = f.filter(h => h.verificationStatus === 'pending');
-  else if (verificationFilter === 'verified') f = f.filter(h => h.verificationStatus === 'verified');
-  else if (verificationFilter === 'rejected') f = f.filter(h => h.verificationStatus === 'rejected');
+  // Surface BOTH legacy (verificationStatus) and new (verificationRequest) records
+  let f = helpers.filter(h => h.verificationStatus || h.verificationRequest || h.status === 'pending');
+  if (verificationFilter === 'pending') {
+    f = f.filter(h => h.verificationStatus === 'pending' || h.verificationRequest?.status === 'pending');
+  } else if (verificationFilter === 'verified') {
+    f = f.filter(h => h.verificationStatus === 'verified' || h.verificationRequest?.status === 'approved' || h.isVerified);
+  } else if (verificationFilter === 'rejected') {
+    f = f.filter(h => h.verificationStatus === 'rejected' || h.verificationRequest?.status === 'rejected');
+  } else if (verificationFilter === 'info_requested') {
+    f = f.filter(h => h.verificationRequest?.status === 'info_requested');
+  }
   document.getElementById('verification-table').innerHTML = f.length === 0 ? empty('✅','No verifications','All caught up!') :
-    `<table class="table"><thead><tr><th>Helper</th><th>Phone</th><th>Method</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(h => {
-      const s = h.verificationStatus || 'not_submitted';
-      const badge = `<span class="badge badge-${s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : 'pending'}">${s}</span>`;
-      // Show actual ID type if available, otherwise legacy method
+    `<table class="table"><thead><tr><th>Helper</th><th>Phone</th><th>Method</th><th>Status</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>` + f.map(h => {
+      // Prefer the new verificationRequest status, fall back to legacy
+      const vr = h.verificationRequest;
+      const s = vr?.status === 'approved' ? 'verified' :
+                vr?.status === 'pending' ? 'pending' :
+                vr?.status === 'rejected' ? 'rejected' :
+                vr?.status === 'info_requested' ? 'info_requested' :
+                (h.verificationStatus || 'not_submitted');
+      const badgeClass = s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : s === 'info_requested' ? 'warning' : 'pending';
+      const badgeText = s === 'info_requested' ? '❓ Info Requested' : s;
+      const badge = `<span class="badge badge-${badgeClass}">${badgeText}</span>`;
+      // Show document type from the new verificationRequest if present, else legacy
       const idLabels = { aadhaar: 'Aadhaar', voter_id: 'Voter ID', driving_license: 'Driving License' };
-      const method = h.idProof?.type ? (idLabels[h.idProof.type] || h.idProof.type) : (h.verificationMethod || 'Aadhaar');
-      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${method}</td><td>${badge}</td><td>${fDate(h.verifiedAt || h.createdAt)}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">View</button></td></tr>`;
+      const method = vr?.idProofType ? (idLabels[vr.idProofType] || vr.idProofType) :
+                     (h.idProof?.type ? (idLabels[h.idProof.type] || h.idProof.type) :
+                      (h.verificationMethod || '—'));
+      const submitted = fDate(vr?.submittedAt || h.verifiedAt || h.createdAt);
+      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${method}</td><td>${badge}</td><td>${submitted}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">Review</button></td></tr>`;
     }).join('') + `</tbody></table>`;
 }
 
