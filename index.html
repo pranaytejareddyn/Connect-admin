@@ -2801,7 +2801,55 @@ function decideLocationRequest(id, decision) {
   const updates = { status: decision, adminNote: note, reviewedBy: adminEmail, reviewedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
   const promises = [db.collection('locationChangeRequests').doc(id).update(updates)];
   if (decision === 'approved') {
-    promises.push(db.collection('helpers').doc(r.helperId).update({ state: r.newState, district: r.newDistrict, village: r.newVillage || r.newCity || '', locationUpdatedAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(e => console.log('Helper location update failed:', e)));
+    // Build the helper-doc update. CRITICAL: include lat/lng so search results,
+    // nearby-distance calculations, and region filters all flip to the new
+    // location. Without this, the helper still appears in old-area searches.
+    const helperLocationUpdate = {
+      state: r.newState || '',
+      district: r.newDistrict || '',
+      village: r.newVillage || r.newCity || '',
+      locationUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    };
+    if (r.newPincode) helperLocationUpdate.pincode = r.newPincode;
+
+    // Resolve coordinates: prefer the ones captured at submission time;
+    // fall back to a Maps Geocoding lookup for legacy requests.
+    const writeHelperUpdate = (lat, lng) => {
+      if (typeof lat === 'number' && typeof lng === 'number') {
+        helperLocationUpdate.lat = lat;
+        helperLocationUpdate.lng = lng;
+      }
+      return db.collection('helpers').doc(r.helperId).update(helperLocationUpdate)
+        .catch(e => console.log('Helper location update failed:', e));
+    };
+
+    if (typeof r.newLat === 'number' && typeof r.newLng === 'number') {
+      promises.push(writeHelperUpdate(r.newLat, r.newLng));
+    } else {
+      // Legacy fallback: geocode the new location via the public Maps API.
+      // Uses the mobile Maps API key (same project, fine to share).
+      const geocodeQ = encodeURIComponent(
+        `${r.newVillage || r.newCity || ''}, ${r.newDistrict || ''}, ${r.newState || ''}`.replace(/^,\s*|,\s*$/g, '')
+      );
+      const MAPS_KEY = 'AIzaSyAC_LSMfRntGTiR4kL2z7FJRGj-c1L27P0';
+      const geoP = fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${geocodeQ}&key=${MAPS_KEY}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data?.results?.[0]?.geometry?.location) {
+            const loc = data.results[0].geometry.location;
+            return writeHelperUpdate(loc.lat, loc.lng);
+          }
+          // Geocoding failed — still update the textual location fields so
+          // district/village match works, just can't fix lat/lng for this one.
+          console.log('Geocoding failed for legacy location request; lat/lng not updated');
+          return writeHelperUpdate(null, null);
+        })
+        .catch(e => {
+          console.log('Geocode fetch failed:', e);
+          return writeHelperUpdate(null, null);
+        });
+      promises.push(geoP);
+    }
   }
   const notifConfig = {
     approved: { type: 'location_change_approved', title: '✅ Location Updated', body: `Your new location is now ${r.newDistrict}, ${r.newState}. You'll appear in searches for that region.${note ? ' Admin note: ' + note : ''}` },
