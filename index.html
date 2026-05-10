@@ -1505,7 +1505,19 @@ function viewHelper(id) {
           ${h.verificationRequest.reviewedBy ? mf('Reviewed By', h.verificationRequest.reviewedBy) : ''}
           ${h.verificationRequest.adminNote ? mf('Your Note to Helper', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.verificationRequest.adminNote}</div>`) : ''}
 
-          <!-- Submitted documents -->
+          <!-- Submitted documents — selfie shown prominently for face-match -->
+          ${h.verificationRequest.selfieUrl ? `
+            <div style="margin-top:12px;background:var(--surface);border:1.5px solid var(--info);border-radius:10px;overflow:hidden">
+              <div style="padding:8px 12px;font-size:12px;font-weight:800;background:var(--info-light);color:var(--info);display:flex;justify-content:space-between;align-items:center">
+                <span>🤳 Live Selfie — match against ID</span>
+                <span style="font-size:10px;font-weight:700;color:var(--text-sec)">Camera capture (no upload)</span>
+              </div>
+              <a href="${h.verificationRequest.selfieUrl}" target="_blank" rel="noopener" style="display:block">
+                <img src="${h.verificationRequest.selfieUrl}" style="width:100%;max-height:280px;object-fit:contain;display:block;background:#000"/>
+              </a>
+            </div>
+          ` : ''}
+
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
             ${h.verificationRequest.idProofUrl ? `
               <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
