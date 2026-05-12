@@ -1471,7 +1471,17 @@ function viewHelper(id) {
       <!-- Services -->
       <div class="modal-section-header">🛠️ Services Offered</div>
       ${mf('Selected Services', skillsChips)}
-      ${mf('Pricing', h.pricingType === 'free' ? '💚 Free' : `💰 ₹${h.hourlyRate || 0}/hr`)}
+      ${mf('Pricing', (() => {
+        // Mirrors getHelperPricingDisplay in services/helperService.ts:
+        //   1. isExplicitlyFree === true → 💚 Free
+        //   2. paid with real rate       → 💰 ₹X/hr
+        //   3. everything else (incl. legacy default + explicit on_request) → 💬 Price on request
+        if (h.isExplicitlyFree === true) return '💚 Free Service';
+        if (h.pricingType === 'paid' && typeof h.hourlyRate === 'number' && h.hourlyRate > 0) {
+          return `💰 ₹${h.hourlyRate}/hr`;
+        }
+        return '💬 Price on Request';
+      })())}
 
       <!-- Document Verification -->
       <div class="modal-section-header">📄 Document Verification</div>
