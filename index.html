@@ -1365,8 +1365,21 @@ function viewHelper(id) {
   // Pretty labels for proof types.
   const idTypeLabels = { aadhaar: 'Aadhaar Card', voter_id: 'Voter ID', driving_license: 'Driving License' };
   const resTypeLabels = { aadhaar_address: 'Aadhaar (with address)', voter_id: 'Voter ID', electricity_bill: 'Electricity Bill', rental_agreement: 'Rental Agreement', bank_passbook: 'Bank Passbook' };
-  const idTypeLabel = idProofType ? (idTypeLabels[idProofType] || idProofType) : null;
-  const resTypeLabel = resProofType ? (resTypeLabels[resProofType] || resProofType) : null;
+  // When type === 'other', the helper supplied a free-text description.
+  // Render that prefixed with "Other:" so admin reviewers see exactly
+  // what unlisted document is being submitted.
+  const idOtherDesc = h.idProof?.otherDescription;
+  const resOtherDesc = h.residencyProof?.otherDescription;
+  const idTypeLabel = idProofType
+    ? (idProofType === 'other'
+        ? `Other: ${idOtherDesc || '(no description provided)'}`
+        : (idTypeLabels[idProofType] || idProofType))
+    : null;
+  const resTypeLabel = resProofType
+    ? (resProofType === 'other'
+        ? `Other: ${resOtherDesc || '(no description provided)'}`
+        : (resTypeLabels[resProofType] || resProofType))
+    : null;
 
   // Document card builder.
   const renderDocCard = (label, kind, url, typeLabel, verified, verifiedAt, verifiedBy, allowVerify) => {
