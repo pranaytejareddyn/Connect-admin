@@ -746,7 +746,19 @@ document.getElementById('login-btn').addEventListener('click', () => {
   errBox.style.display = 'none';
   if (!email || !pass) { errBox.textContent = 'Please enter email and password'; errBox.style.display = 'block'; return; }
   auth.signInWithEmailAndPassword(email, pass)
-    .then(cred => {
+    .then(async cred => {
+      // SECURITY: even with valid Firebase Auth credentials, only emails
+      // on the /admin/allowlist allowlist can actually access the dashboard.
+      // This prevents any user signing up via the mobile app from gaining
+      // admin access (since the mobile app will eventually share the same
+      // Firebase Auth project).
+      const allowed = await isAllowlistedAdmin(cred.user.email || '');
+      if (!allowed) {
+        await auth.signOut();
+        errBox.textContent = 'Access denied. This account is not authorized for admin access.';
+        errBox.style.display = 'block';
+        return;
+      }
       currentAdmin.email = cred.user.email || '';
       currentAdmin.name = (cred.user.email || 'Admin').split('@')[0];
       document.getElementById('admin-name').textContent = currentAdmin.name;
@@ -758,8 +770,37 @@ document.getElementById('login-btn').addEventListener('click', () => {
     .catch(e => { errBox.textContent = 'Login failed: ' + (e.message || 'Invalid credentials'); errBox.style.display = 'block'; });
 });
 
-auth.onAuthStateChanged(user => {
+// Allowlist lookup. Reads /admin/allowlist Firestore doc which contains
+// { emails: ['you@gmail.com', 'admin.support@findmylocal.co', ...] }.
+// Case-insensitive match. If the doc doesn't exist (first-time setup),
+// returns false — admin must create it before anyone can sign in.
+async function isAllowlistedAdmin(email) {
+  if (!email) return false;
+  try {
+    const snap = await db.collection('admin').doc('allowlist').get();
+    if (!snap.exists) {
+      console.warn('Admin allowlist doc missing at /admin/allowlist — no one can sign in until it exists.');
+      return false;
+    }
+    const data = snap.data() || {};
+    const emails = Array.isArray(data.emails) ? data.emails : [];
+    const lower = email.toLowerCase();
+    return emails.some(e => typeof e === 'string' && e.toLowerCase() === lower);
+  } catch (e) {
+    console.error('Allowlist check failed:', e);
+    return false; // fail closed — never grant access on error
+  }
+}
+
+auth.onAuthStateChanged(async user => {
   if (user) {
+    // Same allowlist check on auto-login (page reload with persisted session)
+    const allowed = await isAllowlistedAdmin(user.email || '');
+    if (!allowed) {
+      await auth.signOut();
+      // Stay on login view; let the user see the standard login form
+      return;
+    }
     currentAdmin.email = user.email || '';
     currentAdmin.name = (user.email || 'Admin').split('@')[0];
     document.getElementById('admin-name').textContent = currentAdmin.name;
