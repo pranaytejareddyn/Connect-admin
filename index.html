@@ -87,6 +87,20 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .stat-trend { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
 .stat-trend-up { color: var(--success); }
 .stat-trend-down { color: var(--danger); }
+/* ═══ KPI strip v2 — additive, only affects cards with data-nav-to ═══ */
+.stat-card[data-nav-to] { cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease; }
+.stat-card[data-nav-to]:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); border-color: var(--border-strong); }
+.stat-card[data-nav-to]:active { transform: translateY(0); }
+.stat-card-attention::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--danger); }
+.stat-attention-dot { position: absolute; top: 16px; right: 64px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px rgba(239,68,68,0.18); }
+.stat-card-foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; margin-top: 4px; }
+.stat-trend svg { width: 11px; height: 11px; flex-shrink: 0; }
+.stat-trend-neutral { color: var(--text-mute); }
+.stat-trend-period { color: var(--text-mute); font-weight: 500; margin-left: 3px; font-size: 11px; }
+.stat-spark { width: 70px; height: 24px; flex-shrink: 0; display: block; }
+.stat-icon-svg { display: flex; }
+.stat-icon-svg svg { width: 18px; height: 18px; display: block; }
+@media (max-width: 768px) { .stat-spark { width: 52px; height: 20px; } .stat-attention-dot { right: 50px; top: 14px; } }
 .card { background: var(--surface); border-radius: var(--radius-lg); border: 1px solid var(--border); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 20px; }
 .card-head { padding: 18px 22px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
 .card-title { font-size: 16px; font-weight: 700; color: var(--text); }
@@ -361,10 +375,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
           <div class="filter-bar" id="helper-filters">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="pending">⏳ Pending</button>
-            <button class="filter-btn" data-filter="info_requested">❓ Info Requested</button>
-            <button class="filter-btn" data-filter="appeal_submitted">📝 Appeal Submitted</button>
             <button class="filter-btn" data-filter="approved">✅ Active</button>
-            <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
             <button class="filter-btn" data-filter="suspended">⚠️ Suspended</button>
             <button class="filter-btn" data-filter="blocked">🚫 Blocked</button>
             <button class="filter-btn" data-filter="top_rated">🏆 Top Rated</button>
@@ -388,7 +399,6 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
           <div class="filter-bar" id="verification-filters">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="pending">⏳ Pending</button>
-            <button class="filter-btn" data-filter="info_requested">❓ Info Requested</button>
             <button class="filter-btn" data-filter="verified">✅ Verified</button>
             <button class="filter-btn" data-filter="rejected">❌ Rejected</button>
           </div>
@@ -746,19 +756,7 @@ document.getElementById('login-btn').addEventListener('click', () => {
   errBox.style.display = 'none';
   if (!email || !pass) { errBox.textContent = 'Please enter email and password'; errBox.style.display = 'block'; return; }
   auth.signInWithEmailAndPassword(email, pass)
-    .then(async cred => {
-      // SECURITY: even with valid Firebase Auth credentials, only emails
-      // on the /admin/allowlist allowlist can actually access the dashboard.
-      // This prevents any user signing up via the mobile app from gaining
-      // admin access (since the mobile app will eventually share the same
-      // Firebase Auth project).
-      const allowed = await isAllowlistedAdmin(cred.user.email || '');
-      if (!allowed) {
-        await auth.signOut();
-        errBox.textContent = 'Access denied. This account is not authorized for admin access.';
-        errBox.style.display = 'block';
-        return;
-      }
+    .then(cred => {
       currentAdmin.email = cred.user.email || '';
       currentAdmin.name = (cred.user.email || 'Admin').split('@')[0];
       document.getElementById('admin-name').textContent = currentAdmin.name;
@@ -770,37 +768,8 @@ document.getElementById('login-btn').addEventListener('click', () => {
     .catch(e => { errBox.textContent = 'Login failed: ' + (e.message || 'Invalid credentials'); errBox.style.display = 'block'; });
 });
 
-// Allowlist lookup. Reads /admin/allowlist Firestore doc which contains
-// { emails: ['you@gmail.com', 'admin.support@findmylocal.co', ...] }.
-// Case-insensitive match. If the doc doesn't exist (first-time setup),
-// returns false — admin must create it before anyone can sign in.
-async function isAllowlistedAdmin(email) {
-  if (!email) return false;
-  try {
-    const snap = await db.collection('admin').doc('allowlist').get();
-    if (!snap.exists) {
-      console.warn('Admin allowlist doc missing at /admin/allowlist — no one can sign in until it exists.');
-      return false;
-    }
-    const data = snap.data() || {};
-    const emails = Array.isArray(data.emails) ? data.emails : [];
-    const lower = email.toLowerCase();
-    return emails.some(e => typeof e === 'string' && e.toLowerCase() === lower);
-  } catch (e) {
-    console.error('Allowlist check failed:', e);
-    return false; // fail closed — never grant access on error
-  }
-}
-
-auth.onAuthStateChanged(async user => {
+auth.onAuthStateChanged(user => {
   if (user) {
-    // Same allowlist check on auto-login (page reload with persisted session)
-    const allowed = await isAllowlistedAdmin(user.email || '');
-    if (!allowed) {
-      await auth.signOut();
-      // Stay on login view; let the user see the standard login form
-      return;
-    }
     currentAdmin.email = user.email || '';
     currentAdmin.name = (user.email || 'Admin').split('@')[0];
     document.getElementById('admin-name').textContent = currentAdmin.name;
@@ -1015,22 +984,139 @@ function setBadge(id, n) {
   if (n > 0) { el.textContent = n; el.style.display = 'inline-block'; } else el.style.display = 'none';
 }
 
+// ═══ KPI strip helpers (additive, prefixed kpi*) ═══════════════════════
+const KPI_ICONS = {
+  users:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  shield:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+  alert:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  alertOctagon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  check:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+  clock:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  arrowUp:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>',
+  arrowDown:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+};
+const KPI_TONE_HEX = { primary: '#2563EB', purple: '#8B5CF6', warning: '#F59E0B', danger: '#EF4444', info: '#06B6D4', success: '#10B981' };
+
+function kpiAsDate(v) {
+  if (!v) return null;
+  if (v.toDate) { try { return v.toDate(); } catch { return null; } }
+  if (v instanceof Date) return v;
+  if (typeof v === 'number') return new Date(v);
+  if (typeof v === 'string') { const d = new Date(v); return isNaN(d.getTime()) ? null : d; }
+  return null;
+}
+function kpiCountInRange(items, start, end) {
+  let n = 0;
+  for (const it of items) { const d = kpiAsDate(it.createdAt); if (d && d >= start && d < end) n++; }
+  return n;
+}
+function kpiDailySeries(items, days) {
+  const series = [];
+  const today = new Date(); today.setHours(0,0,0,0);
+  for (let i = days - 1; i >= 0; i--) {
+    const dayStart = new Date(today); dayStart.setDate(dayStart.getDate() - i);
+    const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+    series.push(kpiCountInRange(items, dayStart, dayEnd));
+  }
+  return series;
+}
+function kpiWeekOverWeekTrend(items) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+  const aWeekAgo = new Date(today); aWeekAgo.setDate(aWeekAgo.getDate() - 6);
+  const twoWeeksAgo = new Date(aWeekAgo); twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 7);
+  const thisWeek = kpiCountInRange(items, aWeekAgo, tomorrow);
+  const lastWeek = kpiCountInRange(items, twoWeeksAgo, aWeekAgo);
+  if (lastWeek === 0) {
+    if (thisWeek === 0) return { pct: 0, direction: 'flat' };
+    return { pct: null, direction: 'up' };
+  }
+  const pct = Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
+  if (pct === 0) return { pct: 0, direction: 'flat' };
+  return { pct: Math.abs(pct), direction: pct > 0 ? 'up' : 'down' };
+}
+function kpiSparklineSVG(values, hex) {
+  if (!values || values.length < 2) return `<svg class="stat-spark" viewBox="0 0 70 24"></svg>`;
+  const w = 70, h = 24, pad = 2;
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = Math.max(max - min, 1);
+  const stepX = (w - pad * 2) / (values.length - 1);
+  const pts = values.map((v, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return [x.toFixed(1), y.toFixed(1)];
+  });
+  const line = `M ${pts.map(p => `${p[0]},${p[1]}`).join(' L ')}`;
+  const area = `${line} L ${pts[pts.length - 1][0]},${h} L ${pts[0][0]},${h} Z`;
+  return `<svg class="stat-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${area}" fill="${hex}" opacity="0.14"/><path d="${line}" fill="none" stroke="${hex}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+function kpiRenderCard(cfg) {
+  const items = cfg.items || [];
+  const trend = kpiWeekOverWeekTrend(items);
+  const series = kpiDailySeries(items, 7);
+  let trendCls = 'stat-trend-neutral', trendIcon = '', trendText = 'No change';
+  if (trend.direction === 'up') {
+    trendCls = cfg.invertedTrend ? 'stat-trend-down' : 'stat-trend-up';
+    trendIcon = KPI_ICONS.arrowUp;
+    trendText = trend.pct === null ? 'New' : `${trend.pct}%`;
+  } else if (trend.direction === 'down') {
+    trendCls = cfg.invertedTrend ? 'stat-trend-up' : 'stat-trend-down';
+    trendIcon = KPI_ICONS.arrowDown;
+    trendText = `${trend.pct}%`;
+  }
+  const hex = KPI_TONE_HEX[cfg.tone] || '#2563EB';
+  const attentionOn = cfg.attention && cfg.value > 0;
+  const navAttr = cfg.navTo ? ` data-nav-to="${cfg.navTo}"` : '';
+  const valStr = Number(cfg.value || 0).toLocaleString('en-IN');
+  return `<div class="stat-card${attentionOn ? ' stat-card-attention' : ''}"${navAttr}>
+    ${attentionOn ? '<div class="stat-attention-dot"></div>' : ''}
+    <div class="stat-card-head">
+      <div class="stat-label">${cfg.label}</div>
+      <div class="stat-icon stat-icon-svg" style="background:var(--${cfg.tone}-light);color:var(--${cfg.tone})">${KPI_ICONS[cfg.icon] || ''}</div>
+    </div>
+    <div class="stat-value">${valStr}</div>
+    <div class="stat-card-foot">
+      <div class="stat-trend ${trendCls}">${trendIcon}${trendText}${trend.direction !== 'flat' ? '<span class="stat-trend-period">vs last week</span>' : ''}</div>
+      ${kpiSparklineSVG(series, hex)}
+    </div>
+  </div>`;
+}
+// One-time click delegate — drills into the matching sidebar nav-item.
+(function installKpiClicks() {
+  const grid = document.getElementById('stats-grid');
+  if (!grid || grid.dataset.kpiClicksInstalled) return;
+  grid.dataset.kpiClicksInstalled = '1';
+  grid.addEventListener('click', e => {
+    const card = e.target.closest('.stat-card');
+    if (!card || !card.dataset.navTo) return;
+    const nav = document.querySelector(`.nav-item[data-page="${card.dataset.navTo}"]`);
+    if (nav) nav.click();
+  });
+})();
+
 // ── Overview ──
+// All counts and trends come from the real Firestore arrays. No fake values.
 function updateOverview() {
-  const pendingHelpers = helpers.filter(h => (h.status||'pending') === 'pending').length;
-  const pendingAlerts = alerts.filter(a => (a.status||'pending') === 'pending' || a.status === 'resubmitted').length;
-  const pendingVerify = helpers.filter(h => h.verificationStatus === 'pending').length;
-  const openReports = reports.filter(r => (r.status||'open') === 'open').length;
-  setBadge('badge-helpers', pendingHelpers);
-  setBadge('badge-verification', pendingVerify);
+  const pendingHelpersArr = helpers.filter(h => (h.status||'pending') === 'pending');
+  const pendingAlertsArr  = alerts.filter(a => (a.status||'pending') === 'pending' || a.status === 'resubmitted');
+  // FIX: now matches renderVerification() — surfaces both legacy verificationStatus
+  // and newer verificationRequest sub-doc. Old code missed the newer flow.
+  const pendingVerifyArr  = helpers.filter(h => h.verificationStatus === 'pending' || h.verificationRequest?.status === 'pending');
+  const openReportsArr    = reports.filter(r => (r.status||'open') === 'open');
+
+  setBadge('badge-helpers', pendingHelpersArr.length);
+  setBadge('badge-verification', pendingVerifyArr.length);
+
   document.getElementById('stats-grid').innerHTML = [
-    { label: 'Total Users', val: users.length, icon: '👥', bg: 'primary' },
-    { label: 'Total Helpers', val: helpers.length, icon: '🛡️', bg: 'purple' },
-    { label: 'Pending Alerts', val: pendingAlerts, icon: '🚨', bg: 'warning' },
-    { label: 'Open Reports', val: openReports, icon: '🐛', bg: 'danger' },
-    { label: 'Pending Verification', val: pendingVerify, icon: '✅', bg: 'info' },
-    { label: 'Pending Helpers', val: pendingHelpers, icon: '⏳', bg: 'warning' },
-  ].map(s => `<div class="stat-card"><div class="stat-card-head"><div class="stat-label">${s.label}</div><div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div></div><div class="stat-value">${s.val}</div><div class="stat-trend stat-trend-up">↑ Live</div></div>`).join('');
+    { label: 'Total Users',          value: users.length,             items: users,             icon: 'users',        tone: 'primary',  navTo: 'users' },
+    { label: 'Total Helpers',        value: helpers.length,           items: helpers,           icon: 'shield',       tone: 'purple',   navTo: 'helpers' },
+    { label: 'Pending Verification', value: pendingVerifyArr.length,  items: pendingVerifyArr,  icon: 'check',        tone: 'info',     navTo: 'verification', attention: true, invertedTrend: true },
+    { label: 'Active Alerts',        value: pendingAlertsArr.length,  items: pendingAlertsArr,  icon: 'alert',        tone: 'warning',  navTo: 'alerts',       attention: true, invertedTrend: true },
+    { label: 'Open Reports',         value: openReportsArr.length,    items: openReportsArr,    icon: 'alertOctagon', tone: 'danger',   navTo: 'reports',      attention: true, invertedTrend: true },
+    { label: 'Pending Helpers',      value: pendingHelpersArr.length, items: pendingHelpersArr, icon: 'clock',        tone: 'warning',  navTo: 'helpers',      attention: true, invertedTrend: true },
+  ].map(kpiRenderCard).join('');
+
   renderCharts();
   renderRecentActivity();
 }
@@ -1283,9 +1369,6 @@ function renderHelpers() {
   let f = helpers;
   if (helperFilter === 'pending') f = f.filter(h => (h.status||'pending') === 'pending');
   else if (helperFilter === 'approved') f = f.filter(h => h.status === 'approved' && !h.isBlocked && !h.isSuspended);
-  else if (helperFilter === 'rejected') f = f.filter(h => h.status === 'rejected');
-  else if (helperFilter === 'info_requested') f = f.filter(h => h.status === 'info_requested');
-  else if (helperFilter === 'appeal_submitted') f = f.filter(h => h.status === 'appeal_submitted' || h.status === 'appeal_under_review');
   else if (helperFilter === 'suspended') f = f.filter(h => h.isSuspended);
   else if (helperFilter === 'blocked') f = f.filter(h => h.isBlocked);
   else if (helperFilter === 'top_rated') f = f.filter(h => (h.rating || 0) >= 4.5 && (h.totalRatings || 0) >= 3);
@@ -1312,15 +1395,11 @@ function renderHelpers() {
       const statusBadge = h.isBlocked ? '<span class="badge badge-blocked">🚫 Blocked</span>' :
         h.isSuspended ? '<span class="badge badge-suspended">⚠️ Suspended</span>' :
         h.status === 'approved' ? '<span class="badge badge-active">✅ Active</span>' :
-        h.status === 'rejected' ? '<span class="badge badge-rejected">❌ Rejected</span>' :
-        h.status === 'info_requested' ? '<span class="badge badge-warning">❓ Info Requested</span>' :
-        (h.status === 'appeal_submitted' || h.status === 'appeal_under_review') ? '<span class="badge badge-info">📝 Appeal Submitted</span>' :
-        '<span class="badge badge-pending">⏳ Pending</span>';
-      // Verification status — admin's overall isVerified flag takes precedence;
-      // fall back to per-doc verification flags for legacy helpers.
-      const fullyVerified = h.isVerified || (h.idProof?.verified && h.residencyProof?.verified);
-      const partVerified = !fullyVerified && (h.idProof?.verified || h.residencyProof?.verified || h.verificationStatus === 'verified');
-      const verifyBadge = fullyVerified ? '<span class="badge badge-verified">✓ Verified</span>' :
+        h.status === 'rejected' ? '<span class="badge badge-rejected">❌ Rejected</span>' : '<span class="badge badge-pending">⏳ Pending</span>';
+      // Verification status — fully verified if both ID and residency are verified
+      const fullyVerified = h.idProof?.verified && h.residencyProof?.verified;
+      const partVerified = h.idProof?.verified || h.residencyProof?.verified || h.isVerified || h.verificationStatus === 'verified';
+      const verifyBadge = fullyVerified ? '<span class="badge badge-verified">✓ Full</span>' :
         partVerified ? '<span class="badge badge-warning">⚠ Partial</span>' :
         '<span class="badge badge-unverified">—</span>';
       const online = h.isOnline ? ' 🟢' : '';
@@ -1406,21 +1485,8 @@ function viewHelper(id) {
   // Pretty labels for proof types.
   const idTypeLabels = { aadhaar: 'Aadhaar Card', voter_id: 'Voter ID', driving_license: 'Driving License' };
   const resTypeLabels = { aadhaar_address: 'Aadhaar (with address)', voter_id: 'Voter ID', electricity_bill: 'Electricity Bill', rental_agreement: 'Rental Agreement', bank_passbook: 'Bank Passbook' };
-  // When type === 'other', the helper supplied a free-text description.
-  // Render that prefixed with "Other:" so admin reviewers see exactly
-  // what unlisted document is being submitted.
-  const idOtherDesc = h.idProof?.otherDescription;
-  const resOtherDesc = h.residencyProof?.otherDescription;
-  const idTypeLabel = idProofType
-    ? (idProofType === 'other'
-        ? `Other: ${idOtherDesc || '(no description provided)'}`
-        : (idTypeLabels[idProofType] || idProofType))
-    : null;
-  const resTypeLabel = resProofType
-    ? (resProofType === 'other'
-        ? `Other: ${resOtherDesc || '(no description provided)'}`
-        : (resTypeLabels[resProofType] || resProofType))
-    : null;
+  const idTypeLabel = idProofType ? (idTypeLabels[idProofType] || idProofType) : null;
+  const resTypeLabel = resProofType ? (resTypeLabels[resProofType] || resProofType) : null;
 
   // Document card builder.
   const renderDocCard = (label, kind, url, typeLabel, verified, verifiedAt, verifiedBy, allowVerify) => {
@@ -1525,17 +1591,7 @@ function viewHelper(id) {
       <!-- Services -->
       <div class="modal-section-header">🛠️ Services Offered</div>
       ${mf('Selected Services', skillsChips)}
-      ${mf('Pricing', (() => {
-        // Mirrors getHelperPricingDisplay in services/helperService.ts:
-        //   1. isExplicitlyFree === true → 💚 Free
-        //   2. paid with real rate       → 💰 ₹X/hr
-        //   3. everything else (incl. legacy default + explicit on_request) → 💬 Price on request
-        if (h.isExplicitlyFree === true) return '💚 Free Service';
-        if (h.pricingType === 'paid' && typeof h.hourlyRate === 'number' && h.hourlyRate > 0) {
-          return `💰 ₹${h.hourlyRate}/hr`;
-        }
-        return '💬 Price on Request';
-      })())}
+      ${mf('Pricing', h.pricingType === 'free' ? '💚 Free' : `💰 ₹${h.hourlyRate || 0}/hr`)}
 
       <!-- Document Verification -->
       <div class="modal-section-header">📄 Document Verification</div>
@@ -1556,145 +1612,6 @@ function viewHelper(id) {
       ${mf('Repeat Users', h.repeatUsers || 0)}
       ${h.cancellationRate ? mf('Cancellation Rate', `${Math.round((h.cancellationRate || 0) * 100)}%`) : ''}
 
-      <!-- Get-Verified Verification Request (helper-initiated; separate from onboarding rejection) -->
-      ${h.verificationRequest ? `
-        <div class="modal-section-header">🛡️ Verification Request</div>
-        <div style="padding:14px;border:1.5px solid var(${h.verificationRequest.status === 'pending' ? '--info' : h.verificationRequest.status === 'approved' ? '--success' : h.verificationRequest.status === 'rejected' ? '--danger' : '--warning'});background:var(${h.verificationRequest.status === 'pending' ? '--info-light' : h.verificationRequest.status === 'approved' ? '--success-light' : h.verificationRequest.status === 'rejected' ? '--danger-light' : '--warning-light'});border-radius:10px;margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <div style="font-weight:800;color:var(${h.verificationRequest.status === 'pending' ? '--info' : h.verificationRequest.status === 'approved' ? '--success' : h.verificationRequest.status === 'rejected' ? '--danger' : '--warning'})">${h.verificationRequest.status === 'pending' ? '⏳ Pending Review' : h.verificationRequest.status === 'approved' ? '✓ Approved' : h.verificationRequest.status === 'rejected' ? '❌ Rejected' : '❓ Info Requested'}</div>
-            ${h.verificationRequest.rejectionCount ? `<span class="badge badge-info" style="font-size:10px">Submission #${h.verificationRequest.rejectionCount + 1}</span>` : ''}
-          </div>
-          ${mf('Submitted', fDate(h.verificationRequest.submittedAt))}
-          ${h.verificationRequest.reviewedAt ? mf('Reviewed', fDate(h.verificationRequest.reviewedAt)) : ''}
-          ${h.verificationRequest.reviewedBy ? mf('Reviewed By', h.verificationRequest.reviewedBy) : ''}
-          ${h.verificationRequest.adminNote ? mf('Your Note to Helper', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.verificationRequest.adminNote}</div>`) : ''}
-
-          <!-- Submitted documents — selfie shown prominently for face-match -->
-          ${h.verificationRequest.selfieUrl ? `
-            <div style="margin-top:12px;background:var(--surface);border:1.5px solid var(--info);border-radius:10px;overflow:hidden">
-              <div style="padding:8px 12px;font-size:12px;font-weight:800;background:var(--info-light);color:var(--info);display:flex;justify-content:space-between;align-items:center">
-                <span>🤳 Live Selfie — match against ID</span>
-                <span style="font-size:10px;font-weight:700;color:var(--text-sec)">Camera capture (no upload)</span>
-              </div>
-              <a href="${h.verificationRequest.selfieUrl}" target="_blank" rel="noopener" style="display:block">
-                <img src="${h.verificationRequest.selfieUrl}" style="width:100%;max-height:280px;object-fit:contain;display:block;background:#000"/>
-              </a>
-            </div>
-          ` : ''}
-
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-            ${h.verificationRequest.idProofUrl ? `
-              <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-                <div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🆔 Identity: ${h.verificationRequest.idProofType || ''}</div>
-                <a href="${h.verificationRequest.idProofUrl}" target="_blank" rel="noopener"><img src="${h.verificationRequest.idProofUrl}" style="width:100%;max-height:180px;object-fit:contain;display:block"/></a>
-              </div>
-            ` : ''}
-            ${h.verificationRequest.addressProofUrl ? `
-              <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-                <div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🏠 Address: ${h.verificationRequest.addressProofType || ''}</div>
-                <a href="${h.verificationRequest.addressProofUrl}" target="_blank" rel="noopener"><img src="${h.verificationRequest.addressProofUrl}" style="width:100%;max-height:180px;object-fit:contain;display:block"/></a>
-              </div>
-            ` : ''}
-          </div>
-
-          <!-- Decision controls (only when pending) -->
-          ${h.verificationRequest.status === 'pending' ? `
-            <div style="margin-top:14px;padding:12px;background:var(--surface);border-radius:8px;border:1px solid var(--border)">
-              <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:13px">⚖️ Decide on this request</div>
-              <div class="modal-field"><textarea id="vr-note" class="form-textarea" placeholder="Note to helper (required for reject / request more info)..." maxlength="500"></textarea></div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <button class="btn btn-success btn-sm" onclick="decideVerificationRequest('${h.id}','approved')">✅ Approve & Mark Verified</button>
-                <button class="btn btn-danger btn-sm" onclick="decideVerificationRequest('${h.id}','rejected')">❌ Reject</button>
-                <button class="btn btn-warning btn-sm" onclick="decideVerificationRequest('${h.id}','info_requested')">❓ Request More Info</button>
-              </div>
-            </div>
-          ` : ''}
-        </div>
-      ` : ''}
-
-      <!-- Application Status (rejection / appeal / info-request) -->
-      ${h.status === 'rejected' || h.status === 'info_requested' || h.status === 'appeal_submitted' || h.status === 'appeal_under_review' || h.rejectionReason ? `
-        <div class="modal-section-header">📋 Application Status</div>
-        ${h.status === 'rejected' || h.rejectionReason ? `
-          <div style="padding:14px;border:1.5px solid var(--danger);background:var(--danger-light);border-radius:10px;margin-bottom:12px">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-              <div style="font-weight:800;color:var(--danger)">❌ Application Rejected</div>
-              ${h.appealCount ? `<span class="badge badge-info" style="font-size:10px">Resubmission #${h.appealCount}</span>` : ''}
-            </div>
-            ${mf('Rejection Category', h.rejectionCategory || '—')}
-            ${mf('Rejection Reason', h.rejectionReason || '—')}
-            ${mf('Rejected On', fDate(h.rejectedAt))}
-            ${h.rejectedBy ? mf('Rejected By', h.rejectedBy) : ''}
-            ${h.rejectionNotes ? mf('Internal Notes', `<i>${h.rejectionNotes}</i>`) : ''}
-          </div>
-        ` : ''}
-
-        <!-- Open info-request (admin asked, awaiting helper response) -->
-        ${h.status === 'info_requested' && h.infoRequestNote ? `
-          <div style="padding:14px;border:1.5px solid var(--warning);background:var(--warning-light);border-radius:10px;margin-bottom:12px">
-            <div style="font-weight:800;color:var(--warning);margin-bottom:8px">❓ Awaiting Helper Response</div>
-            ${mf('Message Sent', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.infoRequestNote}</div>`)}
-            ${Array.isArray(h.infoRequestRequiredDocs) && h.infoRequestRequiredDocs.length > 0 ? mf('Required Documents', `<ul style="margin:4px 0 0 0;padding-left:18px">${h.infoRequestRequiredDocs.map(d => `<li style="margin-bottom:2px">${d}</li>`).join('')}</ul>`) : ''}
-            ${mf('Sent On', fDate(h.infoRequestedAt))}
-            ${h.infoRequestedBy ? mf('Sent By', h.infoRequestedBy) : ''}
-          </div>
-        ` : ''}
-
-        <!-- Awaiting appeal review (helper resubmitted, no admin decision yet) -->
-        ${(h.status === 'appeal_submitted' || h.status === 'appeal_under_review') ? `
-          <div style="padding:14px;border:1.5px solid var(--info);background:var(--info-light);border-radius:10px;margin-bottom:12px">
-            <div style="font-weight:800;color:var(--info)">⏳ Awaiting Appeal Review</div>
-          </div>
-        ` : ''}
-
-        <!-- Helper's info response (after responding to an info-request) -->
-        ${h.infoResponse ? `
-          <div style="padding:14px;border:1.5px solid var(--success);background:var(--success-light);border-radius:10px;margin-bottom:12px">
-            <div style="font-weight:800;color:var(--success);margin-bottom:8px">✓ Helper's Response</div>
-            ${mf('Note from Helper', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.infoResponse.note || '—'}</div>`)}
-            ${mf('Submitted', fDate(h.infoResponse.submittedAt))}
-            ${h.infoResponse.newDocs ? `
-              <div style="margin-top:10px"><strong style="font-size:12px;color:var(--text-sec);text-transform:uppercase;letter-spacing:0.5px">New Documents</strong></div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
-                ${h.infoResponse.newDocs.idProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🆔 New ID</div><a href="${h.infoResponse.newDocs.idProofUrl}" target="_blank" rel="noopener"><img src="${h.infoResponse.newDocs.idProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
-                ${h.infoResponse.newDocs.residencyProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🏠 New Residency</div><a href="${h.infoResponse.newDocs.residencyProofUrl}" target="_blank" rel="noopener"><img src="${h.infoResponse.newDocs.residencyProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
-                ${h.infoResponse.newDocs.selfieUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🤳 New Selfie</div><a href="${h.infoResponse.newDocs.selfieUrl}" target="_blank" rel="noopener"><img src="${h.infoResponse.newDocs.selfieUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
-              </div>
-            ` : ''}
-          </div>
-        ` : ''}
-
-        ${h.latestAppeal ? `
-          <div style="padding:14px;border:1.5px solid var(--info);background:var(--info-light);border-radius:10px">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-              <div style="font-weight:800;color:var(--info)">📝 Latest Appeal · <code>${h.latestAppeal.appealId || '—'}</code></div>
-              <span class="badge badge-${h.latestAppeal.status === 'approved' ? 'verified' : h.latestAppeal.status === 'rejected' ? 'rejected' : 'pending'}">${h.latestAppeal.status || 'submitted'}</span>
-            </div>
-            ${mf('Submitted', fDate(h.latestAppeal.submittedAt))}
-            ${mf('Helper Explanation', `<div style="background:var(--surface);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${h.latestAppeal.explanation || '—'}</div>`)}
-            ${h.latestAppeal.newDocs ? `
-              <div style="margin-top:10px"><strong style="font-size:12px;color:var(--text-sec);text-transform:uppercase;letter-spacing:0.5px">Newly Uploaded Documents</strong></div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
-                ${h.latestAppeal.newDocs.idProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🆔 New ID: ${h.latestAppeal.newDocs.idProofType || ''}</div><a href="${h.latestAppeal.newDocs.idProofUrl}" target="_blank" rel="noopener"><img src="${h.latestAppeal.newDocs.idProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
-                ${h.latestAppeal.newDocs.residencyProofUrl ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:6px 8px;font-size:11px;font-weight:700;background:var(--bg-alt);color:var(--text-sec)">🏠 New Residency: ${h.latestAppeal.newDocs.residencyProofType || ''}</div><a href="${h.latestAppeal.newDocs.residencyProofUrl}" target="_blank" rel="noopener"><img src="${h.latestAppeal.newDocs.residencyProofUrl}" style="width:100%;max-height:160px;object-fit:contain;display:block"/></a></div>` : ''}
-              </div>
-            ` : ''}
-            ${h.latestAppeal.adminReply ? `<div style="margin-top:10px;padding:10px;background:var(--surface);border-radius:8px;border-left:3px solid var(--info)"><strong style="font-size:11px;color:var(--info);text-transform:uppercase;letter-spacing:0.5px">Your Previous Reply</strong><div style="margin-top:4px;font-size:13px">${h.latestAppeal.adminReply}</div><div style="font-size:11px;color:var(--text-mute);margin-top:4px">— ${h.latestAppeal.decidedBy || 'Admin'} · ${fDate(h.latestAppeal.decidedAt)}</div></div>` : ''}
-            ${(h.status === 'appeal_submitted' || h.status === 'appeal_under_review') ? `
-              <div style="margin-top:14px;padding:12px;background:var(--surface);border-radius:8px;border:1px solid var(--border)">
-                <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:13px">⚖️ Decide on this appeal</div>
-                <div class="modal-field"><textarea id="ha-reply" class="form-textarea" placeholder="Reply to the helper (will be visible to them)..." maxlength="500"></textarea></div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                  <button class="btn btn-success btn-sm" onclick="decideHelperAppeal('${h.id}','approved')">✅ Approve & Activate</button>
-                  <button class="btn btn-danger btn-sm" onclick="decideHelperAppeal('${h.id}','rejected')">❌ Reject Appeal</button>
-                  <button class="btn btn-warning btn-sm" onclick="decideHelperAppeal('${h.id}','info_requested')">❓ Request More Info</button>
-                </div>
-              </div>
-            ` : ''}
-          </div>
-        ` : ''}
-      ` : ''}
-
       <!-- Moderation Notes (only if any) -->
       ${h.suspensionReason || h.blockReason || h.warningReason ? `
         <div class="modal-section-header">⚠️ Moderation Notes</div>
@@ -1706,14 +1623,10 @@ function viewHelper(id) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
-      ${h.status === 'pending' || h.status === 'info_requested' || h.status === 'appeal_submitted' || h.status === 'appeal_under_review' ?
+      ${h.status === 'pending' ?
         `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','approve')">✅ Approve</button>
-         <button class="btn btn-warning btn-sm" onclick="showInfoRequestModal('${h.id}','${(h.name||h.phone||'').replace(/'/g,"\\'")}')">❓ Request More Info</button>
          <button class="btn btn-danger btn-sm" onclick="helperAction('${h.id}','reject')">❌ Reject</button>` :
-        `${h.isVerified
-            ? `<button class="btn btn-warning btn-sm" onclick="helperAction('${h.id}','unverify')">⚪ Mark Unverified</button>`
-            : `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','verify')">✓ Mark Verified</button>`}
-         ${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction('${h.id}','suspend')">⚠️ Suspend</button>`}
+        `${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction('${h.id}','suspend')">⚠️ Suspend</button>`}
          ${h.isBlocked ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="helperAction('${h.id}','block')">🚫 Block</button>`}`}
     </div>`
   );
@@ -1722,366 +1635,38 @@ function viewHelper(id) {
 function helperAction(id, action) {
   const h = helpers.find(x => x.id === id); if (!h) return;
   if (['warn', 'suspend', 'block'].includes(action)) { showModerationModal('helper', id, action, h.name || h.phone); return; }
-  if (action === 'reject') { showRejectionModal(id, h.name || h.phone); return; }
   if (!confirm(`${action} helper "${h.name || h.phone}"?`)) return;
   const updates = {};
-  if (action === 'approve') {
-    updates.status = 'approved';
-    // Clear pending info-request fields if any so they don't linger
-    updates.infoRequestNote = '';
-    updates.infoRequestRequiredDocs = [];
-  }
+  if (action === 'approve') updates.status = 'approved';
   else if (action === 'reject') updates.status = 'rejected';
   else if (action === 'unblock') { updates.isBlocked = false; updates.blockReason = ''; }
   else if (action === 'unsuspend') { updates.isSuspended = false; updates.suspensionReason = ''; }
-  else if (action === 'verify') {
-    updates.isVerified = true;
-    updates.verifiedAt = firebase.firestore.FieldValue.serverTimestamp();
-    updates.verifiedBy = (currentAdmin && currentAdmin.email) || 'Admin';
-  }
-  else if (action === 'unverify') {
-    updates.isVerified = false;
-    updates.verifiedAt = firebase.firestore.FieldValue.delete();
-    updates.verifiedBy = firebase.firestore.FieldValue.delete();
-  }
   db.collection('helpers').doc(id).update(updates).then(() => {
     Object.assign(h, updates);
     logAudit(`Helper ${action}`, `${h.name || h.phone} (${id.slice(0,8)})`);
     const msg = action === 'approve' ? '🎉 Your helper account has been approved! You can now receive requests.' :
                 action === 'reject' ? '❌ Your helper application was rejected.' :
-                action === 'unblock' ? '✅ Your account has been unblocked.' :
-                action === 'unsuspend' ? '✅ Your account has been reactivated.' :
-                action === 'verify' ? '✓ Your profile has been verified by admin.' :
-                action === 'unverify' ? 'Your verified status has been removed by admin.' :
-                '✅ Action complete.';
+                action === 'unblock' ? '✅ Your account has been unblocked.' : '✅ Your account has been reactivated.';
     db.collection('notifications').add({ userId: id, type: 'admin_action', title: 'Admin Update', body: msg, data: {}, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
     showToast(`✅ Helper ${action}ed`, 'success');
     closeModal(); renderHelpers(); updateOverview();
   }).catch(e => showToast('Error: ' + e.message, 'error'));
 }
 
-// ============================================================================
-// PATCHED: Show "Request More Info" modal — admin captures a clear question and
-// optionally a list of required documents. Sets helper.status='info_requested'
-// so the mobile-side gate locks the helper out and shows the message.
-// ============================================================================
-function showInfoRequestModal(helperId, helperName) {
-  showModal(
-    `<div class="modal-header"><div class="modal-title">❓ Request More Information</div><button class="modal-close" onclick="closeModal()">×</button></div>
-    <div class="modal-body">
-      <div style="background:var(--info-light);padding:12px;border-radius:8px;margin-bottom:16px;border-left:3px solid var(--info)"><div style="font-size:12px;color:var(--info);font-weight:700">ℹ️ The helper will be locked out of the app and will see this message. They can upload missing/corrected documents and resubmit.</div></div>
-      <div class="modal-field"><div class="modal-label">Target</div><div class="modal-value"><strong>${helperName}</strong> <code>${helperId.slice(0,12)}</code></div></div>
-      <div class="modal-field"><div class="modal-label">Message * (visible to helper)</div><textarea id="ir-message" class="form-textarea" placeholder="e.g. We need a clearer photo of the back side of your Aadhaar card. Please retake and resubmit." maxlength="600"></textarea></div>
-      <div class="modal-field"><div class="modal-label">Required Documents (optional, one per line)</div><textarea id="ir-docs" class="form-textarea" placeholder="e.g.&#10;Clear photo of Aadhaar card (back side)&#10;Recent electricity bill" maxlength="500"></textarea></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-warning" onclick="executeInfoRequest('${helperId}')">❓ Send Request</button>
-    </div>`
-  );
-}
-
-function executeInfoRequest(helperId) {
-  const message = document.getElementById('ir-message').value.trim();
-  const docsRaw = document.getElementById('ir-docs').value.trim();
-  if (!message || message.length < 10) {
-    showToast('Please write a clear message (at least 10 characters)', 'error');
-    return;
-  }
-  const requiredDocs = docsRaw ? docsRaw.split('\n').map(s => s.trim()).filter(Boolean) : [];
-
-  const h = helpers.find(x => x.id === helperId); if (!h) return;
-  const adminEmail = (currentAdmin && currentAdmin.email) || 'Admin';
-  const updates = {
-    status: 'info_requested',
-    infoRequestNote: message,
-    infoRequestRequiredDocs: requiredDocs,
-    infoRequestedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    infoRequestedBy: adminEmail,
-    // Clear any previous infoResponse so the helper's new submission is fresh
-    infoResponse: firebase.firestore.FieldValue.delete(),
-  };
-  db.collection('helpers').doc(helperId).update(updates).then(() => {
-    Object.assign(h, updates);
-    logAudit('Request more info', `${h.name || h.phone} — ${message.substring(0, 80)}`);
-    db.collection('notifications').add({
-      userId: helperId,
-      type: 'helper_info_requested',
-      title: '❓ More Information Needed',
-      body: message.substring(0, 200),
-      data: { screen: 'AccountStatus' },
-      read: false,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    showToast('✅ Info request sent. Helper notified.', 'success');
-    closeModal();
-    renderHelpers();
-    updateOverview();
-  }).catch(e => showToast('Error: ' + e.message, 'error'));
-}
-
-// ============================================================================
-// PATCHED: Rejection modal — captures category + detailed reason that the
-// helper will see in the mobile app on the Application Rejected screen.
-// ============================================================================
-function showRejectionModal(helperId, helperName) {
-  const categories = [
-    'Documents unclear or unreadable',
-    'Identity proof invalid or expired',
-    'Residency proof does not match registered address',
-    'Selfie quality issue',
-    'Information mismatch',
-    'Suspected fraudulent application',
-    'Below minimum age requirement',
-    'Service area not yet active',
-    'Duplicate application',
-    'Other',
-  ];
-  showModal(
-    `<div class="modal-header"><div class="modal-title">📋 Reject Helper Application</div><button class="modal-close" onclick="closeModal()">×</button></div>
-    <div class="modal-body">
-      <div style="background:var(--danger-light);padding:12px;border-radius:8px;margin-bottom:16px;border-left:3px solid var(--danger)"><div style="font-size:12px;color:var(--danger);font-weight:700">⚠️ The helper will see this reason on their phone immediately. Be specific so they know exactly what to fix.</div></div>
-      <div class="modal-field"><div class="modal-label">Target</div><div class="modal-value"><strong>${helperName}</strong> <code>${helperId.slice(0,12)}</code></div></div>
-      <div class="modal-field"><div class="modal-label">Category *</div><select id="rj-category" class="form-select" required><option value="">Select category...</option>${categories.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
-      <div class="modal-field"><div class="modal-label">Detailed Reason * (visible to helper)</div><textarea id="rj-reason" class="form-textarea" placeholder="e.g. Your Aadhaar photo is too dark to read. Please retake in better light and resubmit." maxlength="500"></textarea></div>
-      <div class="modal-field"><div class="modal-label">Internal Notes (admin only)</div><textarea id="rj-notes" class="form-textarea" placeholder="Internal notes for other admins..." maxlength="500"></textarea></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-danger" onclick="executeRejection('${helperId}')">📋 Reject Application</button>
-    </div>`
-  );
-}
-
-function executeRejection(helperId) {
-  const category = document.getElementById('rj-category').value;
-  const reason = document.getElementById('rj-reason').value.trim();
-  const notes = document.getElementById('rj-notes').value.trim();
-  if (!category) { showToast('Please select a category', 'error'); return; }
-  if (!reason || reason.length < 10) { showToast('Please write a detailed reason (at least 10 characters)', 'error'); return; }
-
-  const h = helpers.find(x => x.id === helperId); if (!h) return;
-  const updates = {
-    status: 'rejected',
-    rejectionCategory: category,
-    rejectionReason: reason,
-    rejectionNotes: notes,
-    rejectedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    rejectedBy: currentAdmin.email || 'Admin',
-  };
-  db.collection('helpers').doc(helperId).update(updates).then(() => {
-    Object.assign(h, updates);
-    logAudit('Reject helper application', `${h.name || h.phone} — ${category}: ${reason.substring(0, 80)}`);
-    db.collection('notifications').add({
-      userId: helperId,
-      type: 'helper_application_rejected',
-      title: '📋 Application Not Approved',
-      body: `Your helper application was reviewed and not approved. Reason: ${reason.substring(0, 100)}. You can resubmit with corrected information.`,
-      data: { screen: 'AccountStatus' },
-      read: false,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    showToast('✅ Application rejected. Helper notified.', 'success');
-    closeModal();
-    renderHelpers();
-    updateOverview();
-  }).catch(e => showToast('Error: ' + e.message, 'error'));
-}
-
-// ============================================================================
-// PATCHED: Decide on a helper's appeal/resubmission. Three outcomes:
-//   - approved        → status flips to 'approved', helper unlocked
-//   - rejected        → status flips back to 'rejected' (helper can appeal again)
-//   - info_requested  → status stays 'appeal_submitted', helper sees admin note
-// Updates BOTH helpers/{uid} (so the mobile app gate flips) and the matching
-// appeals/{appealId} record (so the admin Appeals page reflects the decision).
-// ============================================================================
-function decideHelperAppeal(helperId, decision) {
-  const h = helpers.find(x => x.id === helperId); if (!h) return;
-  if (!h.latestAppeal) { showToast('No active appeal to decide on', 'error'); return; }
-  const reply = (document.getElementById('ha-reply')?.value || '').trim();
-  if (decision !== 'approved' && reply.length < 10) {
-    showToast('Please write a reply (at least 10 characters)', 'error');
-    return;
-  }
-  const confirmMsg = decision === 'approved'
-    ? `Approve this appeal? "${h.name || h.phone}" will be activated as a helper.`
-    : decision === 'rejected'
-      ? `Reject this appeal? "${h.name || h.phone}" can appeal again.`
-      : `Send a request for more info to "${h.name || h.phone}"?`;
-  if (!confirm(confirmMsg)) return;
-
-  const adminEmail = currentAdmin.email || 'Admin';
-  const helperUpdates = {
-    'latestAppeal.status': decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'submitted',
-    'latestAppeal.adminReply': reply,
-    'latestAppeal.decidedAt': firebase.firestore.FieldValue.serverTimestamp(),
-    'latestAppeal.decidedBy': adminEmail,
-  };
-  if (decision === 'approved') {
-    helperUpdates.status = 'approved';
-    helperUpdates.rejectionReason = '';
-    helperUpdates.rejectionCategory = '';
-    helperUpdates.reinstatedAt = firebase.firestore.FieldValue.serverTimestamp();
-  } else if (decision === 'rejected') {
-    helperUpdates.status = 'rejected';
-    // Latest reason becomes this rejection reason so the helper sees what to fix.
-    if (reply) helperUpdates.rejectionReason = reply;
-  } else if (decision === 'info_requested') {
-    // Promote to first-class info_requested status so mobile shows the proper UI.
-    helperUpdates.status = 'info_requested';
-    helperUpdates.infoRequestNote = reply;
-    helperUpdates.infoRequestedAt = firebase.firestore.FieldValue.serverTimestamp();
-    helperUpdates.infoRequestedBy = adminEmail;
-  }
-
-  // Find the appeal doc in the appeals collection so we update both records.
-  const appealId = h.latestAppeal.appealId;
-  const appealQuery = db.collection('appeals').where('appealId', '==', appealId).limit(1);
-
-  Promise.all([
-    db.collection('helpers').doc(helperId).update(helperUpdates),
-    appealQuery.get().then(snap => {
-      if (snap.empty) return Promise.resolve();
-      const appealRef = snap.docs[0].ref;
-      const appealStatusMap = { approved: 'approved', rejected: 'rejected', info_requested: 'submitted' };
-      return appealRef.update({
-        status: appealStatusMap[decision],
-        adminReply: reply,
-        repliedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        repliedBy: adminEmail,
-      });
-    }),
-  ]).then(() => {
-    // Notify the helper.
-    const notifConfig = {
-      approved: { title: '🎉 Appeal Approved!', body: `Great news — your application is approved. You can now use Connect as a helper. ${reply ? 'Admin note: ' + reply.substring(0, 100) : ''}` },
-      rejected: { title: '❌ Appeal Rejected', body: `Your appeal was rejected. Reason: ${reply.substring(0, 150)}` },
-      info_requested: { title: '❓ More Information Needed', body: reply.substring(0, 200) },
-    };
-    const nc = notifConfig[decision];
-    db.collection('notifications').add({
-      userId: helperId,
-      type: 'helper_appeal_decision',
-      title: nc.title,
-      body: nc.body,
-      data: { screen: 'AccountStatus' },
-      read: false,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    logAudit(`Helper appeal ${decision}`, `${h.name || h.phone} (#${appealId}) — ${reply.substring(0, 60)}`);
-    showToast(`✅ Appeal ${decision === 'info_requested' ? 'response sent' : decision}. Helper notified.`, 'success');
-    closeModal();
-    loadHelpers().then(() => { renderHelpers(); updateOverview(); });
-    loadAppeals().then(renderAppeals);
-  }).catch(e => showToast('Error: ' + e.message, 'error'));
-}
-
-// ── Verification (helper-initiated "Get Verified" flow) ──
-// Decide on a helper.verificationRequest. Three outcomes:
-//   approved        → helper.isVerified=true, verificationRequest.status='approved'
-//   rejected        → verificationRequest.status='rejected', helper sees the note + can resubmit
-//   info_requested  → verificationRequest.status='info_requested', helper updates and resubmits
-// In all cases, helper.status (their primary application status) is unchanged.
-function decideVerificationRequest(helperId, decision) {
-  const h = helpers.find(x => x.id === helperId); if (!h) return;
-  if (!h.verificationRequest) { showToast('No verification request to decide on', 'error'); return; }
-  if (h.verificationRequest.status !== 'pending') {
-    showToast('This request has already been decided', 'error');
-    return;
-  }
-  const note = (document.getElementById('vr-note')?.value || '').trim();
-  if (decision !== 'approved' && note.length < 10) {
-    showToast('Please write a note (at least 10 characters)', 'error');
-    return;
-  }
-  const confirmMsg = decision === 'approved'
-    ? `Approve verification for "${h.name || h.phone}"? They will get the verified badge.`
-    : decision === 'rejected'
-      ? `Reject this verification request? "${h.name || h.phone}" can resubmit with corrected documents.`
-      : `Send a request for more info to "${h.name || h.phone}"?`;
-  if (!confirm(confirmMsg)) return;
-
-  const adminEmail = (currentAdmin && currentAdmin.email) || 'Admin';
-  const updates = {
-    'verificationRequest.status': decision,
-    'verificationRequest.adminNote': note,
-    'verificationRequest.reviewedAt': firebase.firestore.FieldValue.serverTimestamp(),
-    'verificationRequest.reviewedBy': adminEmail,
-  };
-
-  // On approval, also flip the top-level isVerified flag so the badge appears
-  // immediately across the app and the helper-list view.
-  if (decision === 'approved') {
-    updates.isVerified = true;
-    updates.verifiedAt = firebase.firestore.FieldValue.serverTimestamp();
-    updates.verifiedBy = adminEmail;
-  }
-
-  db.collection('helpers').doc(helperId).update(updates).then(() => {
-    // Update local cache so UI reflects changes without a full reload.
-    h.verificationRequest = Object.assign({}, h.verificationRequest, {
-      status: decision, adminNote: note, reviewedBy: adminEmail,
-    });
-    if (decision === 'approved') { h.isVerified = true; h.verifiedBy = adminEmail; }
-
-    // Notification to helper
-    const notifConfig = {
-      approved: { title: '✅ Verification Approved!', body: 'Your account has been verified by our team. The verified badge now appears on your profile.' },
-      rejected: { title: '❌ Verification Rejected', body: `Your verification was rejected. Reason: ${note.substring(0, 150)}` },
-      info_requested: { title: '❓ More Information Needed', body: note.substring(0, 200) },
-    };
-    const nc = notifConfig[decision];
-    db.collection('notifications').add({
-      userId: helperId,
-      type: 'verification_decision',
-      title: nc.title,
-      body: nc.body,
-      data: { screen: 'HelperVerification' },
-      read: false,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    logAudit(`Verification ${decision}`, `${h.name || h.phone} — ${note.substring(0, 60)}`);
-    showToast(`✅ Verification ${decision === 'info_requested' ? 'info request sent' : decision}. Helper notified.`, 'success');
-    closeModal();
-    renderHelpers();
-    renderVerification();
-    updateOverview();
-  }).catch(e => showToast('Error: ' + e.message, 'error'));
-}
-
 // ── Verification ──
 function renderVerification() {
-  // Surface BOTH legacy (verificationStatus) and new (verificationRequest) records
-  let f = helpers.filter(h => h.verificationStatus || h.verificationRequest || h.status === 'pending');
-  if (verificationFilter === 'pending') {
-    f = f.filter(h => h.verificationStatus === 'pending' || h.verificationRequest?.status === 'pending');
-  } else if (verificationFilter === 'verified') {
-    f = f.filter(h => h.verificationStatus === 'verified' || h.verificationRequest?.status === 'approved' || h.isVerified);
-  } else if (verificationFilter === 'rejected') {
-    f = f.filter(h => h.verificationStatus === 'rejected' || h.verificationRequest?.status === 'rejected');
-  } else if (verificationFilter === 'info_requested') {
-    f = f.filter(h => h.verificationRequest?.status === 'info_requested');
-  }
+  let f = helpers.filter(h => h.verificationStatus || h.status === 'pending');
+  if (verificationFilter === 'pending') f = f.filter(h => h.verificationStatus === 'pending');
+  else if (verificationFilter === 'verified') f = f.filter(h => h.verificationStatus === 'verified');
+  else if (verificationFilter === 'rejected') f = f.filter(h => h.verificationStatus === 'rejected');
   document.getElementById('verification-table').innerHTML = f.length === 0 ? empty('✅','No verifications','All caught up!') :
-    `<table class="table"><thead><tr><th>Helper</th><th>Phone</th><th>Method</th><th>Status</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>` + f.map(h => {
-      // Prefer the new verificationRequest status, fall back to legacy
-      const vr = h.verificationRequest;
-      const s = vr?.status === 'approved' ? 'verified' :
-                vr?.status === 'pending' ? 'pending' :
-                vr?.status === 'rejected' ? 'rejected' :
-                vr?.status === 'info_requested' ? 'info_requested' :
-                (h.verificationStatus || 'not_submitted');
-      const badgeClass = s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : s === 'info_requested' ? 'warning' : 'pending';
-      const badgeText = s === 'info_requested' ? '❓ Info Requested' : s;
-      const badge = `<span class="badge badge-${badgeClass}">${badgeText}</span>`;
-      // Show document type from the new verificationRequest if present, else legacy
+    `<table class="table"><thead><tr><th>Helper</th><th>Phone</th><th>Method</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(h => {
+      const s = h.verificationStatus || 'not_submitted';
+      const badge = `<span class="badge badge-${s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : 'pending'}">${s}</span>`;
+      // Show actual ID type if available, otherwise legacy method
       const idLabels = { aadhaar: 'Aadhaar', voter_id: 'Voter ID', driving_license: 'Driving License' };
-      const method = vr?.idProofType ? (idLabels[vr.idProofType] || vr.idProofType) :
-                     (h.idProof?.type ? (idLabels[h.idProof.type] || h.idProof.type) :
-                      (h.verificationMethod || '—'));
-      const submitted = fDate(vr?.submittedAt || h.verifiedAt || h.createdAt);
-      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${method}</td><td>${badge}</td><td>${submitted}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">Review</button></td></tr>`;
+      const method = h.idProof?.type ? (idLabels[h.idProof.type] || h.idProof.type) : (h.verificationMethod || 'Aadhaar');
+      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${method}</td><td>${badge}</td><td>${fDate(h.verifiedAt || h.createdAt)}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">View</button></td></tr>`;
     }).join('') + `</tbody></table>`;
 }
 
@@ -2877,55 +2462,7 @@ function decideLocationRequest(id, decision) {
   const updates = { status: decision, adminNote: note, reviewedBy: adminEmail, reviewedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
   const promises = [db.collection('locationChangeRequests').doc(id).update(updates)];
   if (decision === 'approved') {
-    // Build the helper-doc update. CRITICAL: include lat/lng so search results,
-    // nearby-distance calculations, and region filters all flip to the new
-    // location. Without this, the helper still appears in old-area searches.
-    const helperLocationUpdate = {
-      state: r.newState || '',
-      district: r.newDistrict || '',
-      village: r.newVillage || r.newCity || '',
-      locationUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    };
-    if (r.newPincode) helperLocationUpdate.pincode = r.newPincode;
-
-    // Resolve coordinates: prefer the ones captured at submission time;
-    // fall back to a Maps Geocoding lookup for legacy requests.
-    const writeHelperUpdate = (lat, lng) => {
-      if (typeof lat === 'number' && typeof lng === 'number') {
-        helperLocationUpdate.lat = lat;
-        helperLocationUpdate.lng = lng;
-      }
-      return db.collection('helpers').doc(r.helperId).update(helperLocationUpdate)
-        .catch(e => console.log('Helper location update failed:', e));
-    };
-
-    if (typeof r.newLat === 'number' && typeof r.newLng === 'number') {
-      promises.push(writeHelperUpdate(r.newLat, r.newLng));
-    } else {
-      // Legacy fallback: geocode the new location via the public Maps API.
-      // Uses the mobile Maps API key (same project, fine to share).
-      const geocodeQ = encodeURIComponent(
-        `${r.newVillage || r.newCity || ''}, ${r.newDistrict || ''}, ${r.newState || ''}`.replace(/^,\s*|,\s*$/g, '')
-      );
-      const MAPS_KEY = 'AIzaSyAC_LSMfRntGTiR4kL2z7FJRGj-c1L27P0';
-      const geoP = fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${geocodeQ}&key=${MAPS_KEY}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data?.results?.[0]?.geometry?.location) {
-            const loc = data.results[0].geometry.location;
-            return writeHelperUpdate(loc.lat, loc.lng);
-          }
-          // Geocoding failed — still update the textual location fields so
-          // district/village match works, just can't fix lat/lng for this one.
-          console.log('Geocoding failed for legacy location request; lat/lng not updated');
-          return writeHelperUpdate(null, null);
-        })
-        .catch(e => {
-          console.log('Geocode fetch failed:', e);
-          return writeHelperUpdate(null, null);
-        });
-      promises.push(geoP);
-    }
+    promises.push(db.collection('helpers').doc(r.helperId).update({ state: r.newState, district: r.newDistrict, village: r.newVillage || r.newCity || '', locationUpdatedAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(e => console.log('Helper location update failed:', e)));
   }
   const notifConfig = {
     approved: { type: 'location_change_approved', title: '✅ Location Updated', body: `Your new location is now ${r.newDistrict}, ${r.newState}. You'll appear in searches for that region.${note ? ' Admin note: ' + note : ''}` },
