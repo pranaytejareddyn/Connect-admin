@@ -1354,19 +1354,111 @@ function renderUsers() {
   }
 }
 
+// User-side document type labels — mirror the labels shown in
+// UserOnboardingScreen so admin sees exactly what the user picked.
+// Aadhaar variants flagged "Masked" so reviewers know to expect a
+// privacy-redacted variant per UIDAI's recommendation.
+const USER_ID_LABEL = {
+  aadhaar: 'Aadhaar Card (Masked)',
+  voter_id: 'Voter ID',
+  driving_license: 'Driving License',
+  other: 'Other',
+};
+const USER_RES_LABEL = {
+  aadhaar_address: 'Aadhaar Card (Masked, with address)',
+  voter_id: 'Voter ID',
+  electricity_bill: 'Electricity Bill',
+  rental_agreement: 'Rental Agreement',
+  bank_passbook: 'Bank Passbook',
+  other: 'Other',
+};
+
+// Verification status badge — covers all 5 workflow states.
+function userVerificationBadge(status) {
+  const map = {
+    submitted:  '<span class="badge badge-warning">📤 Submitted — pending admin review</span>',
+    verified:   '<span class="badge badge-success">✅ Verified</span>',
+    rejected:   '<span class="badge badge-danger">❌ Rejected</span>',
+    skipped:    '<span class="badge badge-secondary">⏭️ Skipped — user can verify later</span>',
+    incomplete: '<span class="badge badge-warning">⚠️ Incomplete</span>',
+  };
+  return map[status] || '<span class="badge badge-secondary">— Not submitted</span>';
+}
+
 function viewUser(id) {
   const u = users.find(x => x.id === id); if (!u) return;
   const userAlerts = alerts.filter(a => a.userId === id);
   const userReports = reports.filter(r => r.reporterId === id);
   const locFull = `${u.state ? '🇮🇳 ' + u.state + ' / ' : ''}${u.district || '—'}${u.city ? ' / ' + u.city : ''}${u.village && u.village !== u.city ? ' / ' + u.village : ''}`;
 
+  // Resolve verification metadata. vStatus drives both the badge and which
+  // approval buttons appear in the footer.
+  const vStatus = u.verificationStatus || (u.selfieUrl || u.idProof || u.residencyProof ? 'submitted' : 'not_started');
+  const idLabel = u.idProof ? (u.idProof.type === 'other' ? (u.idProof.otherDescription || 'Other document') + ' (other)' : (USER_ID_LABEL[u.idProof.type] || u.idProof.type)) : null;
+  const resLabel = u.residencyProof ? (u.residencyProof.type === 'other' ? (u.residencyProof.otherDescription || 'Other document') + ' (other)' : (USER_RES_LABEL[u.residencyProof.type] || u.residencyProof.type)) : null;
+
+  // Build verification documents block — only if user actually submitted.
+  // Each image uses class="lb-thumb" so the lightbox JS already loaded
+  // earlier in this file picks it up automatically.
+  const hasAnyVerifDocs = u.selfieUrl || u.idProof?.url || u.residencyProof?.url;
+  const verifDocsHtml = hasAnyVerifDocs ? `
+    <div class="modal-section-header">Verification Documents</div>
+    ${u.selfieUrl ? `
+      <div class="modal-field">
+        <div class="modal-label">📸 Live Selfie</div>
+        <div class="modal-value">
+          <img class="lb-thumb" src="${u.selfieUrl}" style="width:120px;height:120px;border-radius:50%;object-fit:cover;border:3px solid var(--border);cursor:zoom-in" alt="User selfie"/>
+        </div>
+      </div>
+    ` : ''}
+    ${u.idProof?.url ? `
+      <div class="modal-field">
+        <div class="modal-label">🆔 Identity Proof — ${idLabel}</div>
+        <div class="modal-value">
+          <img class="lb-thumb" src="${u.idProof.url}" style="max-width:300px;max-height:240px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" alt="Identity proof"/>
+          ${u.idProof.verified ? '<div style="margin-top:6px"><span class="badge badge-success">✓ Verified by ' + (u.idProof.verifiedBy || 'admin') + '</span></div>' : ''}
+        </div>
+      </div>
+    ` : ''}
+    ${u.residencyProof?.url ? `
+      <div class="modal-field">
+        <div class="modal-label">🏠 Residency Proof — ${resLabel}</div>
+        <div class="modal-value">
+          <img class="lb-thumb" src="${u.residencyProof.url}" style="max-width:300px;max-height:240px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" alt="Residency proof"/>
+          ${u.residencyProof.verified ? '<div style="margin-top:6px"><span class="badge badge-success">✓ Verified by ' + (u.residencyProof.verifiedBy || 'admin') + '</span></div>' : ''}
+        </div>
+      </div>
+    ` : ''}
+  ` : '';
+
+  // Approval action buttons — only shown when there's something to act on.
+  // We treat 'submitted' AND 'incomplete' (partial uploads from edge cases)
+  // AND any legacy state where docs exist but verificationStatus is unset
+  // as "actionable" so admin never gets stuck on stale data.
+  const canActOnVerification = hasAnyVerifDocs && vStatus !== 'verified' && vStatus !== 'rejected';
+
   showModal(
     `<div class="modal-header"><div class="modal-title">👤 User Profile</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
+      ${u.photoURL ? `<div style="text-align:center;margin-bottom:16px"><img class="lb-thumb" src="${u.photoURL}" style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:3px solid var(--border);cursor:zoom-in" alt="Profile picture"/></div>` : ''}
       ${mf('Name', u.name || '—')}
       ${mf('Phone', u.phone || '—')}
       ${mf('User ID', `<code>${u.id}</code>`)}
+      ${u.age ? mf('Age', u.age + ' years') : ''}
+      ${u.gender ? mf('Gender', u.gender) : ''}
+      ${Array.isArray(u.languages) && u.languages.length ? mf('Languages', u.languages.join(', ')) : ''}
+      ${u.bio ? mf('Bio', u.bio) : ''}
+      <div class="modal-section-header">Address</div>
       ${mf('Location', locFull)}
+      ${u.pincode ? mf('Pincode', u.pincode) : ''}
+      ${(typeof u.lat === 'number' && typeof u.lng === 'number') ? mf('Coordinates', `<code>${u.lat.toFixed(5)}, ${u.lng.toFixed(5)}</code>`) : ''}
+      ${u.placeId ? mf('Place ID', `<code style="font-size:11px">${u.placeId}</code>`) : ''}
+      <div class="modal-section-header">Verification</div>
+      ${mf('Status', userVerificationBadge(vStatus))}
+      ${u.verificationSubmittedAt ? mf('Submitted', fDate(u.verificationSubmittedAt)) : ''}
+      ${u.verifiedAt ? mf('Verified', fDate(u.verifiedAt) + (u.verifiedBy ? ' by ' + u.verifiedBy : '')) : ''}
+      ${verifDocsHtml}
+      <div class="modal-section-header">Account</div>
       ${mf('Status', u.isBlocked ? '🚫 Blocked' : u.isSuspended ? '⚠️ Suspended' : u.isVerified ? '✅ Verified & Active' : 'Active')}
       ${mf('Joined', fDate(u.createdAt))}
       ${u.warnings ? mf('Warnings Issued', `<span class="badge badge-warning">${u.warnings}</span>`) : ''}
@@ -1377,11 +1469,64 @@ function viewUser(id) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      ${canActOnVerification ? `
+        <button class="btn btn-success btn-sm" onclick="verifyUser('${u.id}', true)">✓ Approve Verification</button>
+        <button class="btn btn-danger btn-sm" onclick="verifyUser('${u.id}', false)">✗ Reject Verification</button>
+      ` : ''}
       <button class="btn btn-warning btn-sm" onclick="userAction('${u.id}','warn')">⚠️ Warn</button>
       ${u.isSuspended ? `<button class="btn btn-success btn-sm" onclick="userAction('${u.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="userAction('${u.id}','suspend')">⚠️ Suspend</button>`}
       ${u.isBlocked ? `<button class="btn btn-success btn-sm" onclick="userAction('${u.id}','unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="userAction('${u.id}','block')">🚫 Block</button>`}
     </div>`
   );
+}
+
+// Approve or reject a user's verification submission. Writes to users/{uid}
+// and sends a notification. The user's app picks this up via LiveAccountSync
+// within ~1 second — they'll see the verified badge appear (or the rejection
+// message in their Settings) without needing to sign out.
+function verifyUser(id, approve) {
+  const u = users.find(x => x.id === id); if (!u) return;
+  const action = approve ? 'approve' : 'reject';
+  if (!confirm(`${approve ? 'Approve' : 'Reject'} verification for ${u.name || u.phone}?`)) return;
+
+  const updates = {
+    verificationStatus: approve ? 'verified' : 'rejected',
+    isVerified: !!approve,
+    verifiedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    verifiedBy: currentAdmin.email || 'Admin',
+  };
+  // Also mark the sub-objects as verified for finer-grained reads elsewhere.
+  if (approve) {
+    if (u.idProof) updates['idProof.verified'] = true;
+    if (u.idProof) updates['idProof.verifiedAt'] = firebase.firestore.FieldValue.serverTimestamp();
+    if (u.idProof) updates['idProof.verifiedBy'] = currentAdmin.email || 'Admin';
+    if (u.residencyProof) updates['residencyProof.verified'] = true;
+    if (u.residencyProof) updates['residencyProof.verifiedAt'] = firebase.firestore.FieldValue.serverTimestamp();
+    if (u.residencyProof) updates['residencyProof.verifiedBy'] = currentAdmin.email || 'Admin';
+  }
+
+  db.collection('users').doc(id).update(updates).then(() => {
+    Object.assign(u, updates);
+    logAudit(`${action} user verification`, `${u.name || u.phone} (${id.slice(0,8)})`);
+    // Push notification — the user app's notification listener (if any)
+    // will surface this, and the in-app verified badge updates instantly
+    // via LiveAccountSync regardless.
+    db.collection('notifications').add({
+      userId: id,
+      type: 'verification',
+      title: approve ? '✅ Verification Approved' : '❌ Verification Not Approved',
+      body: approve
+        ? 'Your identity has been verified. A verified badge now appears on your profile.'
+        : 'Your verification submission was not approved. You can resubmit from Settings → Verify Account, or contact support.',
+      data: { screen: approve ? 'UserSettings' : 'UserSettings' },
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    showToast(`✅ User verification ${approve ? 'approved' : 'rejected'}. User notified.`, 'success');
+    closeModal();
+    renderUsers();
+    updateOverview();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
 }
 
 function userAction(id, action) {
