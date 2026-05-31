@@ -1031,72 +1031,176 @@ setTimeout(() => { populateDistrictsForFilter('user', ''); populateDistrictsForF
 document.getElementById('modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
 
 // ── Load All ──
-function loadAll() {
-  Promise.all([loadUsers(), loadHelpers(), loadAlerts(), loadReports(), loadReviews(), loadChats(), loadAppeals(), loadAgreements(), loadRestrictions(), loadEnabledRegions(), loadLocationRequests()])
-    .then(() => {
-      updateOverview();
-      // Refresh dropdowns now that data is loaded
-      if (!userState) populateDistrictsForFilter('user', '');
-      if (!helperState) populateDistrictsForFilter('helper', '');
-      renderUsers(); renderHelpers(); renderVerification(); renderAlerts();
-      renderReports(); renderReviews(); renderChats(); renderAppeals();
-      renderAgreements(); renderRestrictions(); renderLocationRequests();
-    });
+// ══════════════════════════════════════════════════════════════════════
+// REAL-TIME DATA LAYER
+// ══════════════════════════════════════════════════════════════════════
+// Every list module subscribes via onSnapshot so admin actions, new
+// user/helper signups, and live user activity reflect in the dashboard
+// within ~1 second WITHOUT manual refresh. Listeners attach on login
+// (loadAll) and persist for the session. Clicking the 🔄 button tears
+// them down and re-attaches — handy if Firestore connection drops.
+//
+// All lists are sorted NEWEST-FIRST client-side via msOf(), which
+// handles three legitimate shapes of createdAt:
+//   • Firestore Timestamp (preferred — new signups use serverTimestamp())
+//   • ISO date string (legacy — early users had new Date().toISOString())
+//   • null/undefined (very old test records — sorted to the bottom)
+//
+// Why client-side sort instead of Firestore orderBy('createdAt')?
+// Firestore strictly orders by VALUE TYPE first: Null → Number → Date →
+// String. So if createdAt is mixed Timestamp+String across the
+// collection (which it IS for any team that has writes from before
+// serverTimestamp() was adopted), all string-typed docs sit BELOW all
+// timestamp-typed docs regardless of date. Client-side sort with msOf()
+// gives a single time-axis across both shapes.
+//
+// Audit logs are the one exception — they've always used Timestamp, so
+// server-side orderBy('timestamp', 'desc').limit(100) is safe and gives
+// us index-backed pagination for free.
+let unsubscribers = [];
+
+function msOf(ts) {
+  if (!ts) return 0;
+  if (ts.toMillis) return ts.toMillis();
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
-function loadUsers() {
-  return db.collection('users').get().then(snap => { users = snap.docs.map(d => ({ id: d.id, ...d.data() })); }).catch(e => { console.log(e); users = []; });
+function tearDownListeners() {
+  unsubscribers.forEach(fn => { try { fn(); } catch {} });
+  unsubscribers = [];
 }
-function loadHelpers() {
-  return db.collection('helpers').get().then(snap => { helpers = snap.docs.map(d => ({ id: d.id, ...d.data() })); }).catch(e => { console.log(e); helpers = []; });
+
+// Charts (used by updateOverview) are expensive to re-render. Only
+// update Overview when the user is actually looking at it. Badges and
+// per-page renders happen on every snapshot regardless.
+function updateOverviewMaybe() {
+  if (document.getElementById('page-overview')?.classList.contains('active')) {
+    try { updateOverview(); } catch (e) { console.log('updateOverview error:', e); }
+  }
 }
-function loadAlerts() {
-  return db.collection('emergencyAlerts').get().then(snap => {
-    alerts = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+
+function loadAll() {
+  tearDownListeners();
+
+  // ── users ──
+  unsubscribers.push(db.collection('users').onSnapshot(snap => {
+    users = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
+    if (!userState) populateDistrictsForFilter('user', '');
+    renderUsers();
+    updateOverviewMaybe();
+  }, err => console.log('users listener error:', err)));
+
+  // ── helpers (also drives Verification page since it filters helpers) ──
+  unsubscribers.push(db.collection('helpers').onSnapshot(snap => {
+    helpers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
+    setBadge('badge-helpers', helpers.filter(h => (h.status||'pending') === 'pending').length);
+    setBadge('badge-verification', helpers.filter(h => h.verificationStatus === 'pending' || h.verificationRequest?.status === 'pending').length);
+    if (!helperState) populateDistrictsForFilter('helper', '');
+    renderHelpers();
+    renderVerification();
+    updateOverviewMaybe();
+  }, err => console.log('helpers listener error:', err)));
+
+  // ── emergencyAlerts ──
+  unsubscribers.push(db.collection('emergencyAlerts').onSnapshot(snap => {
+    alerts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-alerts', alerts.filter(a => (a.status||'pending')==='pending' || a.status==='resubmitted').length);
-  }).catch(e => { console.log(e); alerts = []; });
-}
-function loadReports() {
-  return db.collection('reports').get().then(snap => {
-    reports = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+    renderAlerts();
+    updateOverviewMaybe();
+  }, err => console.log('alerts listener error:', err)));
+
+  // ── reports ──
+  unsubscribers.push(db.collection('reports').onSnapshot(snap => {
+    reports = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-reports', reports.filter(r => (r.status||'open')==='open').length);
-  }).catch(e => { console.log(e); reports = []; });
-}
-function loadReviews() { return db.collection('reviews').get().then(snap => { reviews = snap.docs.map(d => ({ id: d.id, ...d.data() })); }).catch(() => { reviews = []; }); }
-function loadChats() { return db.collection('chats').limit(100).get().then(snap => { chats = snap.docs.map(d => ({ id: d.id, ...d.data() })); }).catch(() => { chats = []; }); }
-function loadAppeals() {
-  return db.collection('appeals').get().then(snap => {
-    appeals = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+    renderReports();
+    updateOverviewMaybe();
+  }, err => console.log('reports listener error:', err)));
+
+  // ── reviews ──
+  unsubscribers.push(db.collection('reviews').onSnapshot(snap => {
+    reviews = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
+    renderReviews();
+  }, err => console.log('reviews listener error:', err)));
+
+  // ── chats (sort by last-message activity, not creation date) ──
+  unsubscribers.push(db.collection('chats').limit(200).onSnapshot(snap => {
+    chats = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.lastMessageAt || b.createdAt) - msOf(a.lastMessageAt || a.createdAt));
+    renderChats();
+  }, err => console.log('chats listener error:', err)));
+
+  // ── appeals ──
+  unsubscribers.push(db.collection('appeals').onSnapshot(snap => {
+    appeals = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-appeals', appeals.filter(a => a.status === 'submitted').length);
-  }).catch(() => { appeals = []; });
-}
-function loadAgreements() {
-  return db.collection('agreements').get().then(snap => {
-    agreements = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+    renderAppeals();
+  }, err => console.log('appeals listener error:', err)));
+
+  // ── agreements ──
+  unsubscribers.push(db.collection('agreements').onSnapshot(snap => {
+    agreements = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-agreements', agreements.filter(a => a.status === 'disputed').length);
-  }).catch(e => { console.log(e); agreements = []; });
-}
-function loadRestrictions() {
-  return db.collection('serviceRestrictions').get().then(snap => {
-    restrictions = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+    renderAgreements();
+  }, err => console.log('agreements listener error:', err)));
+
+  // ── serviceRestrictions ──
+  unsubscribers.push(db.collection('serviceRestrictions').onSnapshot(snap => {
+    restrictions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-service-control', restrictions.filter(r => r.status === 'active').length);
-  }).catch(e => { console.log(e); restrictions = []; });
-}
-function loadEnabledRegions() {
-  return db.collection('enabledRegions').get().then(snap => { enabledRegions = snap.docs.map(d => ({ id: d.id, ...d.data() })); }).catch(e => { console.log(e); enabledRegions = []; });
-}
-function loadLocationRequests() {
-  return db.collection('locationChangeRequests').get().then(snap => {
-    locationRequests = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+    renderRestrictions();
+  }, err => console.log('restrictions listener error:', err)));
+
+  // ── enabledRegions (no sort — it's a config registry, not a timeline) ──
+  unsubscribers.push(db.collection('enabledRegions').onSnapshot(snap => {
+    enabledRegions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderRestrictions();
+  }, err => console.log('enabledRegions listener error:', err)));
+
+  // ── locationChangeRequests ──
+  unsubscribers.push(db.collection('locationChangeRequests').onSnapshot(snap => {
+    locationRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-location-requests', locationRequests.filter(r => r.status === 'pending' || r.status === 'info_requested').length);
-  }).catch(e => { console.log(e); locationRequests = []; });
-}
-function loadAuditLogs() {
-  db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).get().then(snap => {
+    renderLocationRequests();
+  }, err => console.log('locationRequests listener error:', err)));
+
+  // ── auditLogs (server-side orderBy is safe — timestamp is uniform) ──
+  unsubscribers.push(db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).onSnapshot(snap => {
     auditLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderAuditLogs();
-  }).catch(() => { auditLogs = []; renderAuditLogs(); });
+  }, err => console.log('auditLogs listener error:', err)));
 }
+
+// ── Legacy load* shims ───────────────────────────────────────────────
+// These functions used to do one-shot reads. Now the real-time
+// listeners above own the data — these shims exist purely so existing
+// call sites (`loadUsers().then(renderUsers)`, `loadAppeals().then(renderAppeals)`,
+// etc.) keep working without modification. They resolve immediately;
+// renders happen automatically via the snapshot listeners. The chained
+// .then(renderX) calls do trigger an extra render with possibly-stale
+// data, but the listener corrects it within ~50ms — visually fine.
+function loadUsers()             { return Promise.resolve(); }
+function loadHelpers()           { return Promise.resolve(); }
+function loadAlerts()            { return Promise.resolve(); }
+function loadReports()           { return Promise.resolve(); }
+function loadReviews()           { return Promise.resolve(); }
+function loadChats()             { return Promise.resolve(); }
+function loadAppeals()           { return Promise.resolve(); }
+function loadAgreements()        { return Promise.resolve(); }
+function loadRestrictions()      { return Promise.resolve(); }
+function loadEnabledRegions()    { return Promise.resolve(); }
+function loadLocationRequests()  { return Promise.resolve(); }
+function loadAuditLogs()         { return Promise.resolve(); }
 
 function setBadge(id, n) {
   const el = document.getElementById(id);
@@ -1297,8 +1401,12 @@ function renderUsers() {
   else if (userFilter === 'suspended') f = f.filter(u => u.isSuspended);
   else if (userFilter === 'blocked') f = f.filter(u => u.isBlocked);
   else if (userFilter === 'new') {
+    // Use msOf() — same time-axis helper as the data loaders. Handles
+    // both Firestore Timestamp (new signups) and ISO string (legacy
+    // users); the old code only handled Timestamp via .toMillis() and
+    // returned 0 for strings, so legacy users never matched "new".
     const week = Date.now() - 7 * 86400000;
-    f = f.filter(u => (u.createdAt?.toMillis?.() || 0) > week);
+    f = f.filter(u => msOf(u.createdAt) > week);
   }
   if (userState) f = f.filter(u => u.state === userState);
   if (userDistrict) f = f.filter(u => u.district === userDistrict);
