@@ -1497,7 +1497,50 @@ function viewUser(id) {
   const u = users.find(x => x.id === id); if (!u) return;
   const userAlerts = alerts.filter(a => a.userId === id);
   const userReports = reports.filter(r => r.reporterId === id);
-  const locFull = `${u.state ? '🇮🇳 ' + u.state + ' / ' : ''}${u.district || '—'}${u.city ? ' / ' + u.city : ''}${u.village && u.village !== u.city ? ' / ' + u.village : ''}`;
+  // ── Profile vs Search Location resolution ─────────────────────────
+  // The user doc holds TWO independent address records since the
+  // profile/search separation. Display them as separate sections.
+  //
+  //   PROFILE address (home / residence — set during onboarding,
+  //     edited only via Edit Profile):
+  //     fields: district, village, state, pincode, placeId, lat, lng
+  //     Treated as the user's home ONLY when `onboardingCompleted` is
+  //     explicitly true. Legacy users who pre-date the split have these
+  //     fields filled with what was historically search data, so we
+  //     don't surface them under "Home Address" for them.
+  //
+  //   SEARCH location (where the user is currently looking for helpers
+  //     — changeable any time via LocationSelectScreen):
+  //     fields: searchDistrict, searchVillage, searchState, searchPincode,
+  //             searchPlaceId, searchLat, searchLng
+  //     For legacy users without search* fields set, falls back to the
+  //     district/village fields (which historically held search data).
+  const isNewOnboarded = u.onboardingCompleted === true;
+
+  // Profile address (home)
+  const profileLocFull = isNewOnboarded
+    ? `${u.state ? '🇮🇳 ' + u.state + ' / ' : ''}${u.district || '—'}${u.village && u.village !== u.district ? ' / ' + u.village : ''}`
+    : '';
+
+  // Search location (with legacy fallback to district/village/etc.)
+  const searchDistrict = u.searchDistrict || u.district || '';
+  const searchVillage  = u.searchVillage  || u.village  || '';
+  const searchState    = u.searchState    || u.state    || '';
+  const searchPincode  = u.searchPincode  || u.pincode  || '';
+  const searchPlaceId  = u.searchPlaceId  || u.placeId  || '';
+  const searchLat      = (typeof u.searchLat === 'number') ? u.searchLat : (typeof u.lat === 'number' ? u.lat : null);
+  const searchLng      = (typeof u.searchLng === 'number') ? u.searchLng : (typeof u.lng === 'number' ? u.lng : null);
+  const searchLocFull  = `${searchState ? '🇮🇳 ' + searchState + ' / ' : ''}${searchDistrict || '—'}${searchVillage && searchVillage !== searchDistrict ? ' / ' + searchVillage : ''}`;
+
+  // Diff banner — only meaningful for new-onboarded users where both
+  // addresses can be explicitly set and compared.
+  const addressesDiffer = isNewOnboarded && u.searchDistrict
+    && u.searchDistrict !== u.district;
+
+  // Source label for search location (informational for admin)
+  const searchSource = u.searchDistrict
+    ? 'Explicitly picked by user'
+    : (isNewOnboarded ? 'Auto-copied from profile (default)' : 'Legacy field (pre-split user)');
 
   // Resolve verification metadata. vStatus drives both the badge and which
   // approval buttons appear in the footer.
@@ -1556,11 +1599,29 @@ function viewUser(id) {
       ${u.gender ? mf('Gender', u.gender) : ''}
       ${Array.isArray(u.languages) && u.languages.length ? mf('Languages', u.languages.join(', ')) : ''}
       ${u.bio ? mf('Bio', u.bio) : ''}
-      <div class="modal-section-header">Address</div>
-      ${mf('Location', locFull)}
-      ${u.pincode ? mf('Pincode', u.pincode) : ''}
-      ${(typeof u.lat === 'number' && typeof u.lng === 'number') ? mf('Coordinates', `<code>${u.lat.toFixed(5)}, ${u.lng.toFixed(5)}</code>`) : ''}
-      ${u.placeId ? mf('Place ID', `<code style="font-size:11px">${u.placeId}</code>`) : ''}
+      <div class="modal-section-header">🏠 Home Address (Profile)</div>
+      ${isNewOnboarded ? `
+        ${mf('Location', profileLocFull)}
+        ${u.pincode ? mf('Pincode', u.pincode) : ''}
+        ${(typeof u.lat === 'number' && typeof u.lng === 'number') ? mf('Coordinates', `<code>${u.lat.toFixed(5)}, ${u.lng.toFixed(5)}</code>`) : ''}
+        ${u.placeId ? mf('Place ID', `<code style="font-size:11px">${u.placeId}</code>`) : ''}
+        <div style="font-size:11px;color:var(--text-mute);font-style:italic;margin-top:6px">Set during onboarding. Can only be changed via Edit Profile.</div>
+      ` : `
+        <div style="padding:10px;background:var(--bg-alt);border-radius:8px;color:var(--text-mute);font-size:12px;font-style:italic">Profile address not set — user signed up before the home/search separation. Their location data is shown as Search Location below.</div>
+      `}
+      <div class="modal-section-header">🔍 Search Location</div>
+      ${mf('Currently searching', searchLocFull || '— Not set')}
+      ${searchPincode ? mf('Pincode', searchPincode) : ''}
+      ${(typeof searchLat === 'number' && typeof searchLng === 'number') ? mf('Coordinates', `<code>${searchLat.toFixed(5)}, ${searchLng.toFixed(5)}</code>`) : ''}
+      ${searchPlaceId ? mf('Place ID', `<code style="font-size:11px">${searchPlaceId}</code>`) : ''}
+      ${u.searchLocationUpdatedAt ? mf('Last changed', fDate(u.searchLocationUpdatedAt)) : ''}
+      <div style="font-size:11px;color:var(--text-mute);font-style:italic;margin-top:6px">Source: ${searchSource}</div>
+      ${addressesDiffer ? `
+        <div style="background:var(--info-light);padding:10px;border-radius:8px;margin-top:12px;border-left:3px solid var(--info)">
+          <div style="font-weight:700;color:var(--info);font-size:12px">ℹ️ User is searching outside their home region</div>
+          <div style="font-size:11px;color:var(--text-mute);margin-top:3px">Home: <strong>${u.district}${u.state ? ', ' + u.state : ''}</strong> · Search: <strong>${u.searchDistrict}${u.searchState ? ', ' + u.searchState : ''}</strong></div>
+        </div>
+      ` : ''}
       <div class="modal-section-header">Verification</div>
       ${mf('Status', userVerificationBadge(vStatus))}
       ${u.verificationSubmittedAt ? mf('Submitted', fDate(u.verificationSubmittedAt)) : ''}
