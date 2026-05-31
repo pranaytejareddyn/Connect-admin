@@ -369,6 +369,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-section">Insights</div>
     <div class="nav-item" data-page="regions"><span class="nav-icon">🗺️</span>Regions</div>
     <div class="nav-item" data-page="reviews"><span class="nav-icon">⭐</span>Reviews</div>
+    <div class="nav-item" data-page="user-reviews"><span class="nav-icon">👥</span>User Reviews <span class="nav-badge" id="badge-user-reviews" style="display:none">0</span></div>
     <div class="nav-item" data-page="agreements"><span class="nav-icon">📋</span>Agreements <span class="nav-badge" id="badge-agreements" style="display:none">0</span></div>
     <div class="nav-item" data-page="chats"><span class="nav-icon">💬</span>Chats</div>
     <div class="nav-section">System</div>
@@ -619,6 +620,22 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="card"><div class="table-wrap" id="reviews-table"></div></div>
       </div>
 
+      <!-- USER REVIEWS (helper-reviews-user, trust system) -->
+      <div class="page" id="page-user-reviews">
+        <div class="page-head">
+          <div><div class="page-title">User Reviews & Trust Scores</div><div class="page-sub">Reviews left by helpers about users — moderate suspicious ratings here</div></div>
+        </div>
+        <div class="card">
+          <div class="filter-bar" id="user-review-filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="active">✓ Active</button>
+            <button class="filter-btn" data-filter="flagged">⚠️ Flagged</button>
+            <button class="filter-btn" data-filter="removed">🚫 Removed</button>
+          </div>
+          <div class="table-wrap" id="user-reviews-table"></div>
+        </div>
+      </div>
+
       <!-- AGREEMENTS -->
       <div class="page" id="page-agreements">
         <div class="page-head">
@@ -756,7 +773,7 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 
 // ── State ──
-let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[];
+let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[], userReviews=[];
 let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
 let lrStatusFilter='pending', lrTypeFilter='all';
 let userSearchText='', helperSearchText='';
@@ -1128,6 +1145,17 @@ function loadAll() {
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     renderReviews();
   }, err => console.log('reviews listener error:', err)));
+
+  // ── user reviews (Trust & Reputation system) ──
+  // Top-level userReviews collection. Each doc is a helper's review OF a user.
+  // We badge the sidebar with the count of `flagged` reviews so admins see
+  // pending moderation work at a glance.
+  unsubscribers.push(db.collection('userReviews').onSnapshot(snap => {
+    userReviews = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.submittedAt) - msOf(a.submittedAt));
+    setBadge('badge-user-reviews', userReviews.filter(r => r.status === 'flagged').length);
+    renderUserReviews();
+  }, err => console.log('userReviews listener error:', err)));
 
   // ── chats (sort by last-message activity, not creation date) ──
   unsubscribers.push(db.collection('chats').limit(200).onSnapshot(snap => {
@@ -1626,7 +1654,20 @@ function viewUser(id) {
       ${mf('Status', userVerificationBadge(vStatus))}
       ${u.verificationSubmittedAt ? mf('Submitted', fDate(u.verificationSubmittedAt)) : ''}
       ${u.verifiedAt ? mf('Verified', fDate(u.verifiedAt) + (u.verifiedBy ? ' by ' + u.verifiedBy : '')) : ''}
+      ${mf('Verified Badge', u.isVerified === true
+        ? '<span class="badge badge-success">✓ Yes — shown on profile</span>'
+        : '<span class="badge badge-secondary">— Not granted</span>')}
       ${verifDocsHtml}
+
+      <div class="modal-section-header">⭐ Reputation (Helpers' reviews of this user)</div>
+      ${mf('Avg. Rating', typeof u.rating === 'number' && u.totalRatings
+        ? `<span style="color:#F59E0B">${'★'.repeat(Math.round(u.rating))}${'☆'.repeat(5 - Math.round(u.rating))}</span> <strong>${u.rating.toFixed(1)}</strong> · ${u.totalRatings} reviews`
+        : '<span class="badge badge-secondary">No reviews yet</span>')}
+      ${mf('Trust Score', typeof u.trustScore === 'number'
+        ? `<strong style="color:${u.trustScore >= 80 ? 'var(--success)' : u.trustScore >= 60 ? 'var(--warning)' : 'var(--danger)'}">${u.trustScore}/100</strong>`
+        : '<span class="badge badge-secondary">Building reputation</span>')}
+      ${u.totalRatings ? `<div style="font-size:11px;color:var(--text-mute);margin-top:6px;font-style:italic">Full review list available in the <strong>User Reviews</strong> tab (filter by user).</div>` : ''}
+
       <div class="modal-section-header">Account</div>
       ${mf('Status', u.isBlocked ? '🚫 Blocked' : u.isSuspended ? '⚠️ Suspended' : u.isVerified ? '✅ Verified & Active' : 'Active')}
       ${mf('Joined', fDate(u.createdAt))}
@@ -1642,6 +1683,9 @@ function viewUser(id) {
         <button class="btn btn-success btn-sm" onclick="verifyUser('${u.id}', true)">✓ Approve Verification</button>
         <button class="btn btn-danger btn-sm" onclick="verifyUser('${u.id}', false)">✗ Reject Verification</button>
       ` : ''}
+      ${u.isVerified === true
+        ? `<button class="btn btn-warning btn-sm" onclick="manualVerifyUser('${u.id}', false)">↻ Remove Verified Badge</button>`
+        : `<button class="btn btn-info btn-sm" onclick="manualVerifyUser('${u.id}', true)">✓ Mark as Verified</button>`}
       <button class="btn btn-warning btn-sm" onclick="userAction('${u.id}','warn')">⚠️ Warn</button>
       ${u.isSuspended ? `<button class="btn btn-success btn-sm" onclick="userAction('${u.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="userAction('${u.id}','suspend')">⚠️ Suspend</button>`}
       ${u.isBlocked ? `<button class="btn btn-success btn-sm" onclick="userAction('${u.id}','unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="userAction('${u.id}','block')">🚫 Block</button>`}
@@ -1692,6 +1736,59 @@ function verifyUser(id, approve) {
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     });
     showToast(`✅ User verification ${approve ? 'approved' : 'rejected'}. User notified.`, 'success');
+    closeModal();
+    renderUsers();
+    updateOverview();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// Manual verification toggle — admin-direct power, INDEPENDENT of the user's
+// verification submission flow. Use this to:
+//   • Grant the verified badge to a trusted user who never went through the
+//     formal submit-documents flow (e.g. founder vouching, manual verification
+//     via external channels, legacy / grandfathered accounts).
+//   • Revoke the badge from a user whose verification has become invalid
+//     (false documents discovered, account flagged, etc).
+// Writes the same fields the submission-flow uses (isVerified, verifiedAt,
+// verifiedBy) so downstream readers (helper UserProfileScreen badge,
+// notifications, audit) treat both paths identically. Does NOT touch
+// verificationStatus — that field is owned by the submission workflow.
+function manualVerifyUser(id, grant) {
+  const u = users.find(x => x.id === id); if (!u) return;
+  const verb = grant ? 'mark as verified' : 'remove the verified badge from';
+  if (!confirm(`Are you sure you want to ${verb} ${u.name || u.phone}? This is independent of the verification submission flow.`)) return;
+
+  const updates = grant
+    ? {
+        isVerified: true,
+        verifiedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        verifiedBy: (currentAdmin.email || 'Admin') + ' (manual)',
+      }
+    : {
+        isVerified: false,
+        verifiedAt: null,
+        verifiedBy: null,
+      };
+
+  db.collection('users').doc(id).update(updates).then(() => {
+    Object.assign(u, updates);
+    logAudit(
+      grant ? 'manually granted verified badge' : 'manually removed verified badge',
+      `${u.name || u.phone} (${id.slice(0,8)})`
+    );
+    // Notify the user so the change isn't silent.
+    db.collection('notifications').add({
+      userId: id,
+      type: 'verification',
+      title: grant ? '✅ Verified Badge Granted' : 'ℹ️ Verified Badge Removed',
+      body: grant
+        ? 'An admin has granted you a verified badge. It now appears on your profile.'
+        : 'An admin has removed your verified badge. You can resubmit verification from Settings if you believe this was a mistake.',
+      data: { screen: 'UserSettings' },
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    showToast(`✅ Verified badge ${grant ? 'granted' : 'removed'}. User notified.`, 'success');
     closeModal();
     renderUsers();
     updateOverview();
@@ -2341,6 +2438,196 @@ function renderReviews() {
     `<table class="table"><thead><tr><th>Reviewer</th><th>Helper</th><th>Rating</th><th>Comment</th><th>Date</th></tr></thead><tbody>` + reviews.map(r => `
       <tr><td>${r.userName || '—'}</td><td><code>${(r.helperId || '').slice(0, 14)}</code></td><td style="color:#F59E0B">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</td><td>${r.comment || '—'}</td><td>${fDate(r.createdAt)}</td></tr>
     `).join('') + `</tbody></table>`;
+}
+
+// ── User Reviews (Trust & Reputation system) ──
+//
+// Helpers leave reviews ABOUT users. Admins moderate suspicious ones here.
+// Reviews are auto-flagged by userReviewService when abuse signals fire
+// (new helper account, daily rate limit, repeated device fingerprint).
+// Admin can flip status between active / flagged / removed; aggregates
+// on users/{uid} are recomputed locally after every change.
+
+let userReviewFilter = 'all';
+document.addEventListener('click', e => {
+  const btn = e.target.closest('#user-review-filters .filter-btn');
+  if (!btn) return;
+  document.querySelectorAll('#user-review-filters .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  userReviewFilter = btn.getAttribute('data-filter');
+  renderUserReviews();
+});
+
+function userReviewStatusBadge(s) {
+  if (s === 'active')  return '<span class="badge badge-success">✓ Active</span>';
+  if (s === 'flagged') return '<span class="badge badge-warning">⚠️ Flagged</span>';
+  if (s === 'removed') return '<span class="badge badge-danger">🚫 Removed</span>';
+  return '<span class="badge badge-secondary">—</span>';
+}
+
+function flaggedReasonsLabel(reasons) {
+  if (!Array.isArray(reasons) || reasons.length === 0) return '';
+  const map = {
+    helper_account_too_new: 'New account (<7d)',
+    helper_insufficient_interactions: 'Few interactions (<3)',
+    daily_rate_limit_exceeded: 'Daily rate limit hit',
+    device_fingerprint_repeated: 'Repeated device',
+  };
+  return reasons.map(r => map[r] || r).join(' · ');
+}
+
+function renderUserReviews() {
+  const tbl = document.getElementById('user-reviews-table');
+  if (!tbl) return;
+  let list = userReviews;
+  if (userReviewFilter !== 'all') list = list.filter(r => r.status === userReviewFilter);
+  if (list.length === 0) {
+    tbl.innerHTML = empty('👥', 'No user reviews', 'Reviews from helpers about users will appear here');
+    return;
+  }
+  tbl.innerHTML =
+    `<table class="table"><thead><tr><th>Reviewed User</th><th>Reviewing Helper</th><th>Rating</th><th>Status</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>` +
+    list.map(r => {
+      const reviewedUser = users.find(u => u.id === r.userId);
+      const reviewedName = reviewedUser?.name || r.userId?.slice(0, 8) || '—';
+      const stars = `<span style="color:#F59E0B">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</span> ${r.rating || 0}`;
+      return `<tr>
+        <td><strong>${reviewedName}</strong><br><code style="font-size:11px">${(r.userId || '').slice(0, 10)}</code></td>
+        <td>${r.helperName || '—'}${r.helperVerified ? ' <span class="badge badge-primary" style="font-size:10px">✓ Verified</span>' : ''}<br><code style="font-size:11px">${(r.helperId || '').slice(0, 10)}</code></td>
+        <td>${stars}</td>
+        <td>${userReviewStatusBadge(r.status)}${r.flaggedReasons?.length ? `<div style="font-size:10px;color:var(--text-mute);margin-top:3px">${flaggedReasonsLabel(r.flaggedReasons)}</div>` : ''}</td>
+        <td>${fDate(r.submittedAt)}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewUserReview('${r.id}')">Review</button></td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+}
+
+function viewUserReview(id) {
+  const r = userReviews.find(x => x.id === id);
+  if (!r) return;
+  const u = users.find(x => x.id === r.userId);
+  const b = r.behaviors || {};
+  const reviewedName = u?.name || '—';
+
+  showModal(
+    `<div class="modal-header"><div class="modal-title">⭐ User Review</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="modal-section-header">Subject</div>
+      ${mf('Reviewed User', reviewedName)}
+      ${mf('User ID', `<code>${r.userId}</code>`)}
+
+      <div class="modal-section-header">Reviewer</div>
+      ${mf('Helper', `${r.helperName || '—'}${r.helperVerified ? ' <span class="badge badge-primary">✓ Verified Helper</span>' : ''}`)}
+      ${mf('Helper ID', `<code>${r.helperId}</code>`)}
+      ${mf('Interaction', `<code>${r.requestId || '—'}</code>`)}
+
+      <div class="modal-section-header">Rating</div>
+      ${mf('Overall', `<span style="color:#F59E0B;font-size:18px">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</span> <strong>${r.rating || 0}/5</strong>`)}
+      ${mf('Communication', `${'★'.repeat(b.communication || 0)}${'☆'.repeat(5 - (b.communication || 0))} ${b.communication || 0}/5`)}
+      ${mf('Punctuality', `${'★'.repeat(b.punctuality || 0)}${'☆'.repeat(5 - (b.punctuality || 0))} ${b.punctuality || 0}/5`)}
+      ${mf('Payment Reliability', `${'★'.repeat(b.paymentReliability || 0)}${'☆'.repeat(5 - (b.paymentReliability || 0))} ${b.paymentReliability || 0}/5`)}
+      ${mf('Respectful Behavior', `${'★'.repeat(b.respectfulBehavior || 0)}${'☆'.repeat(5 - (b.respectfulBehavior || 0))} ${b.respectfulBehavior || 0}/5`)}
+      ${r.comment ? mf('Comment', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${r.comment}</div>`) : ''}
+
+      <div class="modal-section-header">Moderation</div>
+      ${mf('Status', userReviewStatusBadge(r.status))}
+      ${r.flaggedReasons?.length ? mf('Flagged Reasons', `<span style="color:var(--warning)">${flaggedReasonsLabel(r.flaggedReasons)}</span>`) : ''}
+      ${r.deviceFingerprint ? mf('Device Fingerprint', `<code style="font-size:11px">${r.deviceFingerprint}</code>`) : ''}
+      ${r.removedBy ? mf('Removed By', `${r.removedBy} · ${fDate(r.removedAt)}`) : ''}
+      ${r.removalReason ? mf('Removal Reason', r.removalReason) : ''}
+      ${mf('Submitted', fDate(r.submittedAt))}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      ${r.status !== 'active' ? `<button class="btn btn-success btn-sm" onclick="moderateUserReview('${r.id}','active')">✓ Mark Active</button>` : ''}
+      ${r.status !== 'flagged' ? `<button class="btn btn-warning btn-sm" onclick="moderateUserReview('${r.id}','flagged')">⚠️ Flag</button>` : ''}
+      ${r.status !== 'removed' ? `<button class="btn btn-danger btn-sm" onclick="moderateUserReview('${r.id}','removed')">🚫 Remove</button>` : ''}
+    </div>`
+  );
+}
+
+function moderateUserReview(reviewId, newStatus) {
+  const r = userReviews.find(x => x.id === reviewId);
+  if (!r) return;
+  let reason = null;
+  if (newStatus === 'removed') {
+    reason = prompt('Reason for removal (visible in audit log):');
+    if (reason === null) return; // user cancelled
+  }
+  if (!confirm(`Set this review to "${newStatus}"?`)) return;
+
+  const updates = {
+    status: newStatus,
+    removedBy: newStatus === 'removed' ? (currentAdmin.email || 'Admin') : null,
+    removedAt: newStatus === 'removed' ? firebase.firestore.FieldValue.serverTimestamp() : null,
+    removalReason: newStatus === 'removed' ? (reason || null) : null,
+  };
+
+  db.collection('userReviews').doc(reviewId).update(updates).then(() => {
+    Object.assign(r, updates);
+    logAudit(`moderate user review → ${newStatus}`, `review ${reviewId.slice(0, 16)} (user ${r.userId.slice(0, 8)})`);
+    showToast(`Review set to ${newStatus}. Recomputing user aggregates…`, 'success');
+    return recomputeUserAggregatesClient(r.userId);
+  }).then(() => {
+    showToast('User trust score updated.', 'success');
+    closeModal();
+    renderUserReviews();
+  }).catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// Client-side mirror of userReviewService.recomputeUserRatingAggregates.
+// Runs inside the admin browser (admins act over the same Firestore web SDK
+// the mobile clients use). Keep the formula in sync with the mobile service.
+function recomputeUserAggregatesClient(userId) {
+  return db.collection('userReviews')
+    .where('userId', '==', userId)
+    .where('status', '==', 'active')
+    .get()
+    .then(snap => {
+      const revs = snap.docs.map(d => d.data());
+      const total = revs.length;
+      if (total === 0) {
+        return db.collection('users').doc(userId).set({
+          rating: 0, totalRatings: 0, trustScore: null,
+          ratingBreakdown: {'1':0,'2':0,'3':0,'4':0,'5':0},
+          behaviorAverages: null,
+          ratingUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      const sum = revs.reduce((s, r) => s + (r.rating || 0), 0);
+      const rating = Math.round((sum / total) * 10) / 10;
+      const bk = {'1':0,'2':0,'3':0,'4':0,'5':0};
+      revs.forEach(r => {
+        const b = String(Math.max(1, Math.min(5, Math.round(r.rating || 0))));
+        bk[b]++;
+      });
+      const sb = revs.reduce((a, r) => ({
+        communication: a.communication + ((r.behaviors||{}).communication || 0),
+        punctuality: a.punctuality + ((r.behaviors||{}).punctuality || 0),
+        paymentReliability: a.paymentReliability + ((r.behaviors||{}).paymentReliability || 0),
+        respectfulBehavior: a.respectfulBehavior + ((r.behaviors||{}).respectfulBehavior || 0),
+      }), { communication: 0, punctuality: 0, paymentReliability: 0, respectfulBehavior: 0 });
+      const round1 = n => Math.round((n / total) * 10) / 10;
+      const behaviorAverages = {
+        communication: round1(sb.communication),
+        punctuality: round1(sb.punctuality),
+        paymentReliability: round1(sb.paymentReliability),
+        respectfulBehavior: round1(sb.respectfulBehavior),
+      };
+      // Bayesian trust score — keep in sync with mobile userReviewService
+      let trustScore = null;
+      if (total >= 3) {
+        const PRIOR = 4.0, C = 3;
+        const bay = (C * PRIOR + sum) / (C + total);
+        const vol = Math.min(total / 20, 1) * 10;
+        trustScore = Math.max(0, Math.min(100, Math.round((bay / 5) * 90 + vol)));
+      }
+      return db.collection('users').doc(userId).set({
+        rating, totalRatings: total, trustScore,
+        ratingBreakdown: bk, behaviorAverages,
+        ratingUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
 }
 
 // ── Chats ──
