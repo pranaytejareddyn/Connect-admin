@@ -773,6 +773,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
 
 <script>
 firebase.initializeApp({
@@ -3724,6 +3725,11 @@ function empty(emoji, title, sub) {
     'nagireddypranay633@gmail.com',
   ].map(s => s.toLowerCase());
 
+  // Privileged ops go through Cloud Functions (Admin SDK) — the only sanctioned
+  // writer of the locked adminUsers/adminRoles collections + custom claims.
+  const callFn = (name, data) =>
+    firebase.app().functions('us-central1').httpsCallable(name)(data || {}).then(r => r.data);
+
   const ACTIONS = [
     { key: 'view', label: 'View' }, { key: 'create', label: 'Create' },
     { key: 'edit', label: 'Edit' }, { key: 'delete', label: 'Delete' },
@@ -3819,18 +3825,25 @@ function empty(emoji, title, sub) {
         this.customRoles = snap.docs.map(d => ({ id: d.id, ...d.data(), builtin: false }));
       } catch { this.customRoles = []; }
       this.roles = PREDEFINED_ROLES.concat(this.customRoles);
+      // Sync + read custom claims — the authoritative role source once Phase-2
+      // rules are live. Safe no-op if the function isn't reachable yet.
+      let claims = {};
+      try { await callFn('bootstrapAdminClaims'); } catch (e) { console.log('bootstrap claims:', e && e.message); }
+      try { const tok = auth.currentUser && await auth.currentUser.getIdTokenResult(true); claims = (tok && tok.claims) || {}; } catch {}
+      this.claims = claims;
+      this.setupIdleTimeout();
       // resolve current identity
       let doc = null;
       try { const s = await db.collection('adminUsers').doc(lc).get(); if (s.exists) doc = { id: s.id, ...s.data() }; } catch {}
-      if (SUPER_ADMIN_EMAILS.includes(lc)) {
-        this.me = { email: lc, name: currentAdmin.name, roleId: 'super_admin', roleLabel: 'Super Admin', isSuper: true, permissions: {}, regions: null, status: 'active' };
+      if (SUPER_ADMIN_EMAILS.includes(lc) || claims.superAdmin === true) {
+        this.me = { email: lc, name: (doc && doc.name) || currentAdmin.name, roleId: 'super_admin', roleLabel: 'Super Admin', isSuper: true, permissions: {}, regions: null, status: 'active' };
       } else if (doc) {
         if ((doc.status || 'active') !== 'active') {
           this.me = { email: lc, name: doc.name || currentAdmin.name, roleId: doc.role, roleLabel: 'Suspended', isSuper: false, permissions: {}, regions: doc.assignedRegions || null, status: doc.status };
           this._blockSuspended(doc.status);
           return;
         }
-        const role = this.roleById(doc.role) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
+        const role = this.roleById(claims.role || doc.role) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
         this.me = { email: lc, name: doc.name || currentAdmin.name, roleId: role.id, roleLabel: role.label, isSuper: !!role.isSuper, permissions: role.permissions || {}, regions: doc.assignedRegions || null, status: 'active' };
         try { await db.collection('adminUsers').doc(lc).update({ lastLogin: firebase.firestore.FieldValue.serverTimestamp() }); } catch {}
       } else {
@@ -3858,6 +3871,21 @@ function empty(emoji, title, sub) {
         const mod = el.getAttribute('data-nav-module');
         el.style.display = this.can(mod, 'view') ? '' : 'none';
       });
+    },
+    setupIdleTimeout(minutes) {
+      if (this._idleSetup) return;
+      this._idleSetup = true;
+      const ms = (minutes || 30) * 60 * 1000;
+      const reset = () => {
+        clearTimeout(this._idleTimer);
+        this._idleTimer = setTimeout(() => {
+          alert('Session timed out due to inactivity. Please sign in again.');
+          auth.signOut().then(() => location.reload());
+        }, ms);
+      };
+      ['click', 'keydown', 'mousemove', 'touchstart', 'scroll'].forEach(ev =>
+        document.addEventListener(ev, reset, { passive: true }));
+      reset();
     },
   };
   window.RBAC = RBAC;
@@ -3988,6 +4016,7 @@ function empty(emoji, title, sub) {
       '<div class="modal-footer">' +
       '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
       '<button class="btn btn-ghost btn-sm" onclick="rbacResetPassword(\'' + esc(e.email) + '\')">✉️ Reset Password</button>' +
+      (RBAC.isSuper() ? '<button class="btn btn-warning btn-sm" onclick="rbacForceLogout(\'' + esc(e.email) + '\')">🚪 Force Logout</button>' : '') +
       (canEdit ? (active
         ? '<button class="btn btn-warning btn-sm" onclick="rbacSetStatus(\'' + esc(id) + '\',\'suspended\')">⛔ Suspend</button>'
         : '<button class="btn btn-success btn-sm" onclick="rbacSetStatus(\'' + esc(id) + '\',\'active\')">✅ Activate</button>') : '') +
@@ -3999,44 +4028,44 @@ function empty(emoji, title, sub) {
 
   window.rbacSaveEmployee = async function (id) {
     const val = i => (document.getElementById(i) ? document.getElementById(i).value.trim() : '');
-    const name = val('rbac-f-name'), email = (id ? null : val('rbac-f-email').toLowerCase());
+    const targetEmail = (id ? id : val('rbac-f-email').toLowerCase());
+    const name = val('rbac-f-name');
     const role = document.getElementById('rbac-f-role').value;
-    if (!id && (!name || !email)) return showToast('Name and email are required', 'error');
-    if (!id && !/.+@.+\..+/.test(email)) return showToast('Enter a valid email', 'error');
-    const payload = {
+    if (!targetEmail) return showToast('Email is required', 'error');
+    if (!id && !/.+@.+\..+/.test(targetEmail)) return showToast('Enter a valid email', 'error');
+    if (!name) return showToast('Name is required', 'error');
+    const profile = {
       name, phone: val('rbac-f-phone'), employeeId: val('rbac-f-empid'),
       designation: val('rbac-f-desig'), department: val('rbac-f-dept'),
-      photoURL: val('rbac-f-photo'), role, assignedRegions: readRegionPicker(),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: currentAdmin.email,
+      photoURL: val('rbac-f-photo'), assignedRegions: readRegionPicker(),
     };
+    if (!id) profile.status = 'active';
     try {
-      if (id) {
-        const before = RBAC.employees.find(x => x.id === id) || {};
-        await db.collection('adminUsers').doc(id).set(payload, { merge: true });
-        logAudit('Update employee', name + ' (' + id + ')', 'user_role_management', { role: before.role, status: before.status }, { role });
-      } else {
-        payload.email = email; payload.status = 'active';
-        payload.createdAt = firebase.firestore.FieldValue.serverTimestamp(); payload.createdBy = currentAdmin.email;
-        await db.collection('adminUsers').doc(email).set(payload);
-        logAudit('Create employee', name + ' (' + email + ') as ' + role, 'user_role_management', null, { email, role });
-      }
+      const before = id ? (RBAC.employees.find(x => x.id === id) || {}) : null;
+      await callFn('setAdminRole', { email: targetEmail, role, profile });
+      logAudit(id ? 'Update employee' : 'Create employee', name + ' (' + targetEmail + ') → ' + role, 'user_role_management', before ? { role: before.role } : null, { role });
       showToast('✅ Employee saved', 'success'); closeModal(); renderEmployees();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+    } catch (e) { showToast('Error: ' + (e.message || 'save failed'), 'error'); }
   };
   window.rbacSetStatus = async function (id, status) {
     try {
-      await db.collection('adminUsers').doc(id).update({ status, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: currentAdmin.email });
+      await callFn('setEmployeeStatus', { email: id, status });
       logAudit(status === 'active' ? 'Activate employee' : 'Suspend employee', id, 'user_role_management', null, { status });
-      showToast('✅ Status updated', 'success'); closeModal(); renderEmployees();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+      showToast('✅ Status updated' + (status !== 'active' ? ' — sessions revoked' : ''), 'success'); closeModal(); renderEmployees();
+    } catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
   };
   window.rbacDeleteEmployee = async function (id) {
     if (!confirm('Remove this employee\'s role & profile?\n\nNote: this does NOT delete their Firebase Auth login — disable that in Firebase Console if needed.')) return;
     try {
-      await db.collection('adminUsers').doc(id).delete();
+      await callFn('deleteEmployee', { email: id });
       logAudit('Delete employee', id, 'user_role_management', { id }, null);
       showToast('Employee removed', 'success'); closeModal(); renderEmployees();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+    } catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
+  };
+  window.rbacForceLogout = async function (email) {
+    if (!confirm('Force logout ' + email + '? All their sessions end immediately and they must sign in again.')) return;
+    try { await callFn('forceLogout', { email }); logAudit('Force logout', email, 'user_role_management'); showToast('✅ Sessions revoked', 'success'); }
+    catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
   };
   window.rbacResetPassword = async function (email) {
     if (!confirm('Send a password-reset email to ' + email + '?')) return;
@@ -4102,25 +4131,25 @@ function empty(emoji, title, sub) {
     if (!label) return showToast('Role name required', 'error');
     const perms = {};
     document.querySelectorAll('.rbac-perm:checked').forEach(c => { const m = c.getAttribute('data-m'), a = c.getAttribute('data-a'); perms[m] = perms[m] || {}; perms[m][a] = true; });
-    const payload = { label, desc: document.getElementById('rbac-role-desc').value.trim(), color: document.getElementById('rbac-role-color').value, permissions: perms, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: currentAdmin.email };
+    const role = { label, desc: document.getElementById('rbac-role-desc').value.trim(), color: document.getElementById('rbac-role-color').value, permissions: perms };
     try {
-      if (id) { await db.collection('adminRoles').doc(id).set(payload, { merge: true }); logAudit('Update role', label, 'user_role_management'); }
-      else { payload.createdAt = firebase.firestore.FieldValue.serverTimestamp(); payload.createdBy = currentAdmin.email; await db.collection('adminRoles').add(payload); logAudit('Create role', label, 'user_role_management', null, { label }); }
+      await callFn('saveAdminRole', { id: id || null, role });
       // refresh roles cache
       const snap = await db.collection('adminRoles').get();
       RBAC.customRoles = snap.docs.map(d => ({ id: d.id, ...d.data(), builtin: false }));
       RBAC.roles = PREDEFINED_ROLES.concat(RBAC.customRoles);
+      logAudit(id ? 'Update role' : 'Create role', label, 'user_role_management', null, { label });
       showToast('✅ Role saved', 'success'); closeModal(); renderRoles();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+    } catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
   };
   window.rbacDeleteRole = async function (id) {
     if (!confirm('Delete this custom role? Employees assigned to it will fall back to view-only.')) return;
     try {
-      await db.collection('adminRoles').doc(id).delete(); logAudit('Delete role', id, 'user_role_management');
-      RBAC.roles = PREDEFINED_ROLES.concat(RBAC.customRoles.filter(r => r.id !== id));
+      await callFn('deleteAdminRole', { id }); logAudit('Delete role', id, 'user_role_management');
       RBAC.customRoles = RBAC.customRoles.filter(r => r.id !== id);
+      RBAC.roles = PREDEFINED_ROLES.concat(RBAC.customRoles);
       showToast('Role deleted', 'success'); closeModal(); renderRoles();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+    } catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
   };
 
   // small helper for labelled inputs (mirrors the dashboard's mf())
