@@ -333,7 +333,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="login-error" id="login-error" style="display:none"></div>
     <div class="login-field">
       <div class="login-label">Email</div>
-      <input type="email" id="admin-email" class="login-input" placeholder="admin@company.com" autocomplete="email"/>
+      <input type="text" id="admin-email" class="login-input" placeholder="Email or Employee ID (EMP000001)" autocomplete="username"/>
     </div>
     <div class="login-field">
       <div class="login-label">Password</div>
@@ -900,12 +900,23 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 });
 
 // ── Login ──
-document.getElementById('login-btn').addEventListener('click', () => {
-  const email = document.getElementById('admin-email').value.trim();
+document.getElementById('login-btn').addEventListener('click', async () => {
+  const idInput = document.getElementById('admin-email').value.trim();
   const pass = document.getElementById('admin-pass').value;
   const errBox = document.getElementById('login-error');
   errBox.style.display = 'none';
-  if (!email || !pass) { errBox.textContent = 'Please enter email and password'; errBox.style.display = 'block'; return; }
+  if (!idInput || !pass) { errBox.textContent = 'Please enter your email/employee ID and password'; errBox.style.display = 'block'; return; }
+  // Allow login with either an email or an Employee ID (EMP000001). A Cloud
+  // Function resolves the ID → email (adminUsers is locked, so the client
+  // can't read it directly before sign-in).
+  let email = idInput;
+  if (!idInput.includes('@')) {
+    try {
+      const r = await firebase.app().functions('us-central1').httpsCallable('resolveEmployeeEmail')({ identifier: idInput });
+      email = (r.data && r.data.email) || '';
+    } catch (e) { email = ''; }
+    if (!email) { errBox.textContent = 'No account found for that Employee ID'; errBox.style.display = 'block'; return; }
+  }
   auth.signInWithEmailAndPassword(email, pass)
     .then(cred => {
       currentAdmin.email = cred.user.email || '';
@@ -3832,6 +3843,9 @@ function empty(emoji, title, sub) {
       try { await callFn('bootstrapAdminClaims'); } catch (e) { console.log('bootstrap claims:', e && e.message); }
       try { const tok = auth.currentUser && await auth.currentUser.getIdTokenResult(true); claims = (tok && tok.claims) || {}; } catch {}
       this.claims = claims;
+      // First-login / forced password change gate — the employee must replace
+      // their temporary password before any dashboard access.
+      if (claims && claims.mustChangePassword === true) { this._forcePasswordGate(); return; }
       this.setupIdleTimeout();
       // resolve current identity
       let doc = null;
@@ -3846,7 +3860,8 @@ function empty(emoji, title, sub) {
         }
         const role = this.roleById(claims.role || doc.role) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
         this.me = { email: lc, name: doc.name || currentAdmin.name, roleId: role.id, roleLabel: role.label, isSuper: !!role.isSuper, permissions: role.permissions || {}, regions: doc.assignedRegions || null, status: 'active' };
-        try { await db.collection('adminUsers').doc(lc).update({ lastLogin: firebase.firestore.FieldValue.serverTimestamp() }); } catch {}
+        // lastLogin is stamped server-side by bootstrapAdminClaims (adminUsers is
+        // write-locked to Cloud Functions now).
       } else {
         // Phase 1, no enforcement: an account with no employee record behaves as
         // it did before RBAC (full access). Phase 2's locked rules flip this to deny.
@@ -3861,6 +3876,22 @@ function empty(emoji, title, sub) {
         '<h2 style="margin:12px 0 6px">Account ' + (status === 'inactive' ? 'inactive' : 'suspended') + '</h2>' +
         '<p style="color:var(--text-sec)">Your admin account has been ' + (status === 'inactive' ? 'deactivated' : 'suspended') + '. Contact a Super Admin.</p>' +
         '<button class="btn btn-ghost" style="margin-top:16px" onclick="auth.signOut().then(()=>location.reload())">Sign out</button></div>';
+    },
+    _forcePasswordGate() {
+      document.getElementById('login-view').style.display = 'none';
+      const av = document.getElementById('app-view');
+      av.style.display = 'block';
+      av.innerHTML =
+        '<div style="max-width:420px;margin:13vh auto;padding:32px;text-align:center">' +
+        '<div style="font-size:48px">🔑</div>' +
+        '<h2 style="margin:10px 0 4px">Set a new password</h2>' +
+        '<p style="color:var(--text-sec);margin-bottom:16px">For security, you must replace your temporary password before continuing.</p>' +
+        '<input id="fpc-new" type="password" class="login-input" placeholder="New password (min 6 characters)" style="margin-bottom:8px"/>' +
+        '<input id="fpc-confirm" type="password" class="login-input" placeholder="Confirm new password" style="margin-bottom:12px"/>' +
+        '<div id="fpc-err" class="login-error" style="display:none"></div>' +
+        '<button class="login-btn" style="width:100%" onclick="rbacSubmitNewPassword()">Update Password</button>' +
+        '<button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="auth.signOut().then(()=>location.reload())">Sign out</button>' +
+        '</div>';
     },
     applyGating() {
       document.querySelectorAll('.nav-item[data-page]').forEach(el => {
@@ -3986,9 +4017,10 @@ function empty(emoji, title, sub) {
     showModal(
       '<div class="modal-header"><div class="modal-title">➕ Add Employee</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
       '<div class="modal-body">' +
-      '<div style="background:var(--info-light);padding:10px;border-radius:8px;margin-bottom:14px;font-size:12px;color:var(--info)">First create the login in Firebase Console → Authentication → Add user, then add the matching <b>email</b> here to grant a role.</div>' +
-      mfInput('Full Name *', 'rbac-f-name') + mfInput('Email * (must match the Auth login)', 'rbac-f-email', 'email') +
-      mfInput('Phone', 'rbac-f-phone') + mfInput('Employee ID', 'rbac-f-empid') +
+      '<div style="background:var(--info-light);padding:10px;border-radius:8px;margin-bottom:14px;font-size:12px;color:var(--info)">This creates the login account and a unique <b>Employee ID</b> automatically. The employee signs in with their email <b>or</b> Employee ID + the temporary password, and is forced to set a new password on first login.</div>' +
+      mfInput('Full Name *', 'rbac-f-name') + mfInput('Email *', 'rbac-f-email', 'email') +
+      '<div class="modal-field"><div class="modal-label">Temporary Password *</div><div style="display:flex;gap:8px"><input type="text" id="rbac-f-temppass" class="form-input" placeholder="min 6 characters" style="flex:1"/><button class="btn btn-ghost" type="button" onclick="document.getElementById(\'rbac-f-temppass\').value=rbacGenPassword()">🎲 Generate</button></div></div>' +
+      mfInput('Phone', 'rbac-f-phone') +
       mfInput('Designation', 'rbac-f-desig') + mfInput('Department', 'rbac-f-dept') +
       mfInput('Profile Picture URL', 'rbac-f-photo') +
       '<div class="modal-field"><div class="modal-label">Role *</div><select id="rbac-f-role" class="form-select">' + roleOptions('read_only_viewer') + '</select></div>' +
@@ -4007,16 +4039,19 @@ function empty(emoji, title, sub) {
       '<div class="modal-header"><div class="modal-title">👤 ' + esc(e.name || 'Employee') + '</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
       '<div class="modal-body">' +
       mfInput('Full Name', 'rbac-f-name', 'text', e.name) + mf('Email', '<code>' + esc(e.email) + '</code>') +
-      mfInput('Phone', 'rbac-f-phone', 'text', e.phone) + mfInput('Employee ID', 'rbac-f-empid', 'text', e.employeeId) +
+      mfInput('Phone', 'rbac-f-phone', 'text', e.phone) + mf('Employee ID', '<code>' + esc(e.employeeId || '—') + '</code>') +
       mfInput('Designation', 'rbac-f-desig', 'text', e.designation) + mfInput('Department', 'rbac-f-dept', 'text', e.department) +
       mfInput('Profile Picture URL', 'rbac-f-photo', 'text', e.photoURL) +
       '<div class="modal-field"><div class="modal-label">Role</div><select id="rbac-f-role" class="form-select"' + (canEdit ? '' : ' disabled') + '>' + roleOptions(e.role) + '</select></div>' +
       regionPickerHtml(e.assignedRegions) +
       mf('Created', e.createdAt ? fDate(e.createdAt) : '—') + mf('Last Login', e.lastLogin ? fDate(e.lastLogin) : 'Never') +
+      mf('Password Changed', e.passwordChangedAt ? fDate(e.passwordChangedAt) : 'Never') +
+      (e.mustChangePassword ? '<div class="modal-field"><span class="badge badge-warning">⚠️ Must change password at next login</span></div>' : '') +
       '</div>' +
       '<div class="modal-footer">' +
       '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
-      '<button class="btn btn-ghost btn-sm" onclick="rbacResetPassword(\'' + esc(e.email) + '\')">✉️ Reset Password</button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="rbacResetPassword(\'' + esc(e.email) + '\')">🔑 Reset Password</button>' +
+      (RBAC.isSuper() ? '<button class="btn btn-ghost btn-sm" onclick="rbacForcePasswordChange(\'' + esc(e.email) + '\')">🔁 Force Change</button>' : '') +
       (RBAC.isSuper() ? '<button class="btn btn-warning btn-sm" onclick="rbacForceLogout(\'' + esc(e.email) + '\')">🚪 Force Logout</button>' : '') +
       (canEdit ? (active
         ? '<button class="btn btn-warning btn-sm" onclick="rbacSetStatus(\'' + esc(id) + '\',\'suspended\')">⛔ Suspend</button>'
@@ -4025,6 +4060,15 @@ function empty(emoji, title, sub) {
       (canEdit ? '<button class="btn btn-primary" onclick="rbacSaveEmployee(\'' + esc(id) + '\')">💾 Save</button>' : '') +
       '</div>'
     );
+  };
+
+  window.rbacGenPassword = function () {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#$%';
+    let out = '';
+    const arr = new Uint32Array(12);
+    (window.crypto || {}).getRandomValues ? window.crypto.getRandomValues(arr) : arr.forEach((_, i) => arr[i] = Math.floor(Math.random() * 1e9));
+    for (let i = 0; i < 12; i++) out += chars[arr[i] % chars.length];
+    return out;
   };
 
   window.rbacSaveEmployee = async function (id) {
@@ -4036,16 +4080,33 @@ function empty(emoji, title, sub) {
     if (!id && !/.+@.+\..+/.test(targetEmail)) return showToast('Enter a valid email', 'error');
     if (!name) return showToast('Name is required', 'error');
     const profile = {
-      name, phone: val('rbac-f-phone'), employeeId: val('rbac-f-empid'),
+      name, phone: val('rbac-f-phone'),
       designation: val('rbac-f-desig'), department: val('rbac-f-dept'),
       photoURL: val('rbac-f-photo'), assignedRegions: readRegionPicker(),
     };
-    if (!id) profile.status = 'active';
     try {
-      const before = id ? (RBAC.employees.find(x => x.id === id) || {}) : null;
-      await callFn('setAdminRole', { email: targetEmail, role, profile });
-      logAudit(id ? 'Update employee' : 'Create employee', name + ' (' + targetEmail + ') → ' + role, 'user_role_management', before ? { role: before.role } : null, { role });
-      showToast('✅ Employee saved', 'success'); closeModal(); renderEmployees();
+      if (!id) {
+        // CREATE — Cloud Function makes the Auth login + Employee ID + claims.
+        const tempPass = val('rbac-f-temppass');
+        if (!tempPass || tempPass.length < 6) return showToast('Temporary password must be at least 6 characters', 'error');
+        const res = await callFn('createEmployee', { email: targetEmail, password: tempPass, role, profile, regions: profile.assignedRegions });
+        logAudit('Create employee', name + ' (' + targetEmail + ') → ' + role, 'user_role_management', null, { role, employeeId: res && res.employeeId });
+        closeModal(); renderEmployees();
+        showModal(
+          '<div class="modal-header"><div class="modal-title">✅ Employee Created</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+          '<div class="modal-body"><p style="margin-bottom:12px">Share these credentials securely. The employee must change the password on first login.</p>' +
+          mf('Employee ID', '<code>' + esc((res && res.employeeId) || '—') + '</code>') +
+          mf('Login (email)', '<code>' + esc(targetEmail) + '</code>') +
+          mf('Temporary Password', '<code>' + esc(tempPass) + '</code>') +
+          '</div><div class="modal-footer"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>'
+        );
+      } else {
+        // EDIT — role/profile only.
+        const before = RBAC.employees.find(x => x.id === id) || {};
+        await callFn('setAdminRole', { email: targetEmail, role, profile });
+        logAudit('Update employee', name + ' (' + targetEmail + ') → ' + role, 'user_role_management', { role: before.role }, { role });
+        showToast('✅ Employee saved', 'success'); closeModal(); renderEmployees();
+      }
     } catch (e) { showToast('Error: ' + (e.message || 'save failed'), 'error'); }
   };
   window.rbacSetStatus = async function (id, status) {
@@ -4069,9 +4130,38 @@ function empty(emoji, title, sub) {
     catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
   };
   window.rbacResetPassword = async function (email) {
-    if (!confirm('Send a password-reset email to ' + email + '?')) return;
-    try { await auth.sendPasswordResetEmail(email); logAudit('Send password reset', email, 'user_role_management'); showToast('✅ Reset email sent', 'success'); }
-    catch (e) { showToast('Error: ' + e.message, 'error'); }
+    const tempPass = rbacGenPassword();
+    if (!confirm('Reset password for ' + email + '?\n\nA new temporary password will be set, they must change it on next login, and their current sessions will end.')) return;
+    try {
+      await callFn('resetEmployeePassword', { email, password: tempPass });
+      logAudit('Reset password', email, 'user_role_management');
+      renderEmployees();
+      showModal(
+        '<div class="modal-header"><div class="modal-title">🔑 Password Reset</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+        '<div class="modal-body"><p style="margin-bottom:12px">Share this securely. <b>' + esc(email) + '</b> must change it on next login.</p>' +
+        mf('Temporary Password', '<code>' + esc(tempPass) + '</code>') +
+        '</div><div class="modal-footer"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>'
+      );
+    } catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
+  };
+  window.rbacForcePasswordChange = async function (email) {
+    if (!confirm('Force ' + email + ' to change their password on next login?\n\nTheir current sessions will end immediately.')) return;
+    try { await callFn('forcePasswordChange', { email }); logAudit('Force password change', email, 'user_role_management'); showToast('✅ They must set a new password at next login', 'success'); closeModal(); renderEmployees(); }
+    catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
+  };
+  window.rbacSubmitNewPassword = async function () {
+    const n = (document.getElementById('fpc-new') || {}).value || '';
+    const c = (document.getElementById('fpc-confirm') || {}).value || '';
+    const err = document.getElementById('fpc-err');
+    const showErr = m => { if (err) { err.textContent = m; err.style.display = 'block'; } };
+    if (err) err.style.display = 'none';
+    if (!n || n.length < 6) return showErr('Password must be at least 6 characters');
+    if (n !== c) return showErr('Passwords do not match');
+    try {
+      await firebase.app().functions('us-central1').httpsCallable('changeMyPassword')({ newPassword: n });
+      try { await auth.currentUser.getIdToken(true); } catch {}
+      location.reload();
+    } catch (e) { showErr((e && e.message) || 'Could not update password'); }
   };
 
   // ════════ ROLES ════════
