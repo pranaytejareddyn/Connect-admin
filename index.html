@@ -2453,7 +2453,7 @@ function renderUserReviews() {
         <td style="color:#F59E0B">${stars} <span style="color:var(--text-mute)">${Number(r.rating||0).toFixed(1)}</span></td>
         <td>${(r.comment||'—').substring(0,60)}</td>
         <td><span class="badge ${badge}">${status}</span></td>
-        <td>${(r.flaggedReasons||[]).length ? '<span class="badge badge-warning">'+(r.flaggedReasons||[]).length+'</span>' : '—'}</td>
+        <td>${r.userReported ? '<span class="badge badge-danger">🚩 User-reported</span> ' : ''}${(r.flaggedReasons||[]).length ? '<span class="badge badge-warning">'+(r.flaggedReasons||[]).length+'</span>' : (r.userReported ? '' : '—')}</td>
         <td>${fDate(r.submittedAt)}</td>
         <td><button class="btn btn-primary btn-sm" onclick="viewUserReview('${r.id}')">Review</button></td>
       </tr>`;
@@ -2481,6 +2481,7 @@ function viewUserReview(id) {
     <div class="modal-section-header">Moderation</div>
     ${mf('Status', `<span class="badge ${sb}">${status}</span>`)}
     ${(r.flaggedReasons||[]).length ? mf('Auto-flag reasons', (r.flaggedReasons||[]).join(', ')) : ''}
+    ${r.userReported ? mf('🚩 User-reported', `${r.userReportReason || 'No reason given'}${r.userReportedAt ? ' · ' + fDate(r.userReportedAt) : ''}`) : ''}
     ${r.removedBy ? mf('Removed by', `${r.removedBy} · ${r.removalReason||''}`) : ''}
     ${mf('Submitted', fDate(r.submittedAt))}
   </div>
