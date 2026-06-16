@@ -369,6 +369,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-section">Insights</div>
     <div class="nav-item" data-page="regions"><span class="nav-icon">🗺️</span>Regions</div>
     <div class="nav-item" data-page="reviews"><span class="nav-icon">⭐</span>Reviews</div>
+    <div class="nav-item" data-page="user-reviews"><span class="nav-icon">🧑‍⚖️</span>User Reviews</div>
     <div class="nav-item" data-page="agreements"><span class="nav-icon">📋</span>Agreements <span class="nav-badge" id="badge-agreements" style="display:none">0</span></div>
     <div class="nav-item" data-page="chats"><span class="nav-icon">💬</span>Chats</div>
     <div class="nav-section">System</div>
@@ -619,6 +620,20 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="card"><div class="table-wrap" id="reviews-table"></div></div>
       </div>
 
+      <!-- USER REVIEWS (Helper → User) -->
+      <div class="page" id="page-user-reviews">
+        <div class="page-head"><div><div class="page-title">User Reviews</div><div class="page-sub">Helper→User reviews — audit & moderate</div></div></div>
+        <div class="card">
+          <div class="filter-bar" id="user-review-filters">
+            <button class="filter-btn active" data-urfilter="all">All</button>
+            <button class="filter-btn" data-urfilter="active">✅ Active</button>
+            <button class="filter-btn" data-urfilter="flagged">🚩 Flagged</button>
+            <button class="filter-btn" data-urfilter="removed">🗑️ Removed</button>
+          </div>
+          <div class="table-wrap" id="user-reviews-table"></div>
+        </div>
+      </div>
+
       <!-- AGREEMENTS -->
       <div class="page" id="page-agreements">
         <div class="page-head">
@@ -756,7 +771,8 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 
 // ── State ──
-let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[];
+let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[], userReviews=[];
+let userReviewFilter='all';
 let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
 let lrStatusFilter='pending', lrTypeFilter='all';
 let userSearchText='', helperSearchText='';
@@ -1128,6 +1144,13 @@ function loadAll() {
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     renderReviews();
   }, err => console.log('reviews listener error:', err)));
+
+  // ── userReviews (Helper→User) ──
+  unsubscribers.push(db.collection('userReviews').onSnapshot(snap => {
+    userReviews = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.submittedAt) - msOf(a.submittedAt));
+    renderUserReviews();
+  }, err => console.log('userReviews listener error:', err)));
 
   // ── chats (sort by last-message activity, not creation date) ──
   unsubscribers.push(db.collection('chats').limit(200).onSnapshot(snap => {
@@ -1596,6 +1619,7 @@ function viewUser(id) {
       ${mf('Phone', u.phone || '—')}
       ${mf('User ID', `<code>${u.id}</code>`)}
       ${u.age ? mf('Age', u.age + ' years') : ''}
+      ${mf('Date of Birth', u.dateOfBirth ? new Date(u.dateOfBirth).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'No Info')}
       ${u.gender ? mf('Gender', u.gender) : ''}
       ${Array.isArray(u.languages) && u.languages.length ? mf('Languages', u.languages.join(', ')) : ''}
       ${u.bio ? mf('Bio', u.bio) : ''}
@@ -2401,6 +2425,127 @@ function renderReviews() {
     `<table class="table"><thead><tr><th>Reviewer</th><th>Helper</th><th>Rating</th><th>Comment</th><th>Date</th></tr></thead><tbody>` + reviews.map(r => `
       <tr><td>${r.userName || '—'}</td><td><code>${(r.helperId || '').slice(0, 14)}</code></td><td style="color:#F59E0B">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</td><td>${r.comment || '—'}</td><td>${fDate(r.createdAt)}</td></tr>
     `).join('') + `</tbody></table>`;
+}
+
+// ── User Reviews (Helper → User) audit + moderation ──────────────────
+document.getElementById('user-review-filters')?.addEventListener('click', e => {
+  if (!e.target.classList.contains('filter-btn')) return;
+  userReviewFilter = e.target.getAttribute('data-urfilter');
+  document.querySelectorAll('#user-review-filters .filter-btn').forEach(b => b.classList.remove('active'));
+  e.target.classList.add('active');
+  renderUserReviews();
+});
+
+function renderUserReviews() {
+  const el = document.getElementById('user-reviews-table');
+  if (!el) return;
+  let f = userReviews;
+  if (userReviewFilter !== 'all') f = f.filter(r => (r.status || 'active') === userReviewFilter);
+  el.innerHTML = f.length === 0 ? empty('🧑‍⚖️','No user reviews','Helper→User reviews appear here') :
+    `<table class="table"><thead><tr><th>Reviewer (Helper)</th><th>Target User</th><th>Rating</th><th>Comment</th><th>Status</th><th>Flags</th><th>Date</th><th>Actions</th></tr></thead><tbody>` +
+    f.map(r => {
+      const status = r.status || 'active';
+      const badge = status === 'active' ? 'badge-success' : status === 'flagged' ? 'badge-warning' : 'badge-danger';
+      const stars = '★'.repeat(r.rating||0) + '☆'.repeat(5-(r.rating||0));
+      return `<tr>
+        <td>${r.helperName||'—'}<br><span class="user-meta"><code>${(r.helperId||'').slice(0,10)}</code></span></td>
+        <td><code>${(r.userId||'').slice(0,12)}</code></td>
+        <td style="color:#F59E0B">${stars} <span style="color:var(--text-mute)">${Number(r.rating||0).toFixed(1)}</span></td>
+        <td>${(r.comment||'—').substring(0,60)}</td>
+        <td><span class="badge ${badge}">${status}</span></td>
+        <td>${(r.flaggedReasons||[]).length ? '<span class="badge badge-warning">'+(r.flaggedReasons||[]).length+'</span>' : '—'}</td>
+        <td>${fDate(r.submittedAt)}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewUserReview('${r.id}')">Review</button></td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+}
+
+function viewUserReview(id) {
+  const r = userReviews.find(x => x.id === id); if (!r) return;
+  const b = r.behaviors || {};
+  const status = r.status || 'active';
+  const sb = status==='active'?'badge-success':status==='flagged'?'badge-warning':'badge-danger';
+  showModal(`<div class="modal-header"><div class="modal-title">🧑‍⚖️ User Review</div><button class="modal-close" onclick="closeModal()">×</button></div>
+  <div class="modal-body">
+    ${mf('Reviewer (Helper)', `${r.helperName||'—'} <code>${r.helperId||''}</code>`)}
+    ${mf('Target User', `<code>${r.userId||''}</code>`)}
+    ${mf('Rating', `⭐ ${Number(r.rating||0).toFixed(1)} / 5`)}
+    ${mf('Comment', r.comment || '—')}
+    ${mf('Interaction', `${r.interactionType||'—'} · <code>${r.requestId||''}</code>`)}
+    <div class="modal-section-header">Behavior breakdown</div>
+    ${mf('Communication', b.communication ?? '—')}
+    ${mf('Punctuality', b.punctuality ?? '—')}
+    ${mf('Payment reliability', b.paymentReliability ?? '—')}
+    ${mf('Respectful behavior', b.respectfulBehavior ?? '—')}
+    ${mf('Cooperation', b.cooperation ?? '—')}
+    <div class="modal-section-header">Moderation</div>
+    ${mf('Status', `<span class="badge ${sb}">${status}</span>`)}
+    ${(r.flaggedReasons||[]).length ? mf('Auto-flag reasons', (r.flaggedReasons||[]).join(', ')) : ''}
+    ${r.removedBy ? mf('Removed by', `${r.removedBy} · ${r.removalReason||''}`) : ''}
+    ${mf('Submitted', fDate(r.submittedAt))}
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+    ${status!=='active' ? `<button class="btn btn-success btn-sm" onclick="moderateUserReview('${r.id}','active')">✅ Restore</button>` : ''}
+    ${status!=='flagged' ? `<button class="btn btn-warning btn-sm" onclick="moderateUserReview('${r.id}','flagged')">🚩 Flag</button>` : ''}
+    ${status!=='removed' ? `<button class="btn btn-danger btn-sm" onclick="moderateUserReview('${r.id}','removed')">🗑️ Remove</button>` : ''}
+  </div>`);
+}
+
+function moderateUserReview(id, status) {
+  const r = userReviews.find(x => x.id === id); if (!r) return;
+  let removalReason = null;
+  if (status === 'removed') removalReason = prompt('Reason for removal (optional):') || null;
+  db.collection('userReviews').doc(id).update({
+    status,
+    removedBy: status === 'removed' ? (currentAdmin.email || 'Admin') : null,
+    removedAt: status === 'removed' ? firebase.firestore.FieldValue.serverTimestamp() : null,
+    removalReason: status === 'removed' ? removalReason : null,
+  }).then(() => {
+    logAudit('Moderate user review', `${id} → ${status}`);
+    showToast(`Review set to ${status}. Recomputing user rating…`, 'info');
+    closeModal();
+    return recomputeUserAggregates(r.userId);
+  }).then(() => showToast('User rating updated', 'success'))
+    .catch(e => showToast('Error: ' + e.message, 'error'));
+}
+
+// Mirrors src/services/userReviewService.ts recomputeUserRatingAggregates +
+// computeTrustScore EXACTLY so admin moderation keeps user aggregates correct.
+async function recomputeUserAggregates(userId) {
+  if (!userId) return;
+  const snap = await db.collection('userReviews')
+    .where('userId','==',userId).where('status','==','active').get();
+  const rvs = snap.docs.map(d => d.data());
+  const total = rvs.length;
+  const ts = firebase.firestore.FieldValue.serverTimestamp();
+  if (total === 0) {
+    await db.collection('users').doc(userId).set({
+      rating: 0, totalRatings: 0, trustScore: null,
+      ratingBreakdown: {'1':0,'2':0,'3':0,'4':0,'5':0}, behaviorAverages: null,
+      ratingUpdatedAt: ts,
+    }, { merge: true });
+    return;
+  }
+  const sum = rvs.reduce((s,r)=>s+(r.rating||0),0);
+  const rating = Math.round((sum/total)*10)/10;
+  const breakdown = {'1':0,'2':0,'3':0,'4':0,'5':0};
+  rvs.forEach(r => { const k=String(Math.max(1,Math.min(5,Math.round(r.rating||0)))); breakdown[k]++; });
+  const dims = ['communication','punctuality','paymentReliability','respectfulBehavior','cooperation'];
+  const sums={}, counts={}; dims.forEach(d=>{sums[d]=0;counts[d]=0;});
+  rvs.forEach(r => { const bb=r.behaviors||{}; dims.forEach(d=>{ const v=bb[d]; if (typeof v==='number'&&v>=1&&v<=5){sums[d]+=v;counts[d]++;} }); });
+  const ba={}; dims.forEach(d=> ba[d]= counts[d]>0?Math.round((sums[d]/counts[d])*10)/10:0);
+  const PRIOR_R=4.0, PRIOR_W=3, MIN=3, VOL=20, VOLMAX=10;
+  let trustScore = null;
+  if (total >= MIN) {
+    const bayesian = (PRIOR_W*PRIOR_R + sum)/(PRIOR_W+total);
+    const volumeBonus = Math.min(total/VOL,1)*VOLMAX;
+    trustScore = Math.max(0, Math.min(100, Math.round((bayesian/5)*90 + volumeBonus)));
+  }
+  await db.collection('users').doc(userId).set({
+    rating, totalRatings: total, trustScore,
+    ratingBreakdown: breakdown, behaviorAverages: ba, ratingUpdatedAt: ts,
+  }, { merge: true });
 }
 
 // ── Chats ──
