@@ -376,6 +376,8 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-item" data-page="notifications"><span class="nav-icon">🔔</span>Broadcasts</div>
     <div class="nav-item" data-page="service-control"><span class="nav-icon">🌍</span>Region Operations <span class="nav-badge" id="badge-service-control" style="display:none">0</span></div>
     <div class="nav-item" data-page="audit"><span class="nav-icon">📜</span>Audit Logs</div>
+    <div class="nav-section" data-nav-module="user_role_management">Administration</div>
+    <div class="nav-item" data-page="rbac" data-nav-module="user_role_management"><span class="nav-icon">🔐</span>User &amp; Roles</div>
     <div class="sidebar-footer">
       <div>Connect v1.0.0</div>
       <div style="margin-top:4px">🇮🇳 Pan-India Operations</div>
@@ -731,6 +733,18 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="page-head"><div><div class="page-title">Audit Logs</div><div class="page-sub">All admin actions tracked</div></div></div>
         <div class="card"><div class="card-body" id="audit-logs"><div class="loading-state"><div class="spinner"></div>Loading audit logs...</div></div></div>
       </div>
+
+      <!-- USER & ROLE MANAGEMENT (RBAC) -->
+      <div class="page" id="page-rbac">
+        <div class="page-head">
+          <div><div class="page-title">User &amp; Role Management</div><div class="page-sub">Employees, roles &amp; granular permissions</div></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" id="rbac-tab-employees-btn" onclick="rbacSetTab('employees')">👥 Employees</button>
+            <button class="btn btn-ghost" id="rbac-tab-roles-btn" onclick="rbacSetTab('roles')">🎭 Roles</button>
+          </div>
+        </div>
+        <div id="rbac-root"><div class="loading-state"><div class="spinner"></div>Loading…</div></div>
+      </div>
     </main>
   </div>
 </div>
@@ -899,7 +913,7 @@ document.getElementById('login-btn').addEventListener('click', () => {
       document.getElementById('admin-avatar').textContent = currentAdmin.name.charAt(0).toUpperCase();
       document.getElementById('login-view').style.display = 'none';
       document.getElementById('app-view').style.display = 'grid';
-      loadAll();
+      RBAC.init(currentAdmin.email).then(() => loadAll());
     })
     .catch(e => { errBox.textContent = 'Login failed: ' + (e.message || 'Invalid credentials'); errBox.style.display = 'block'; });
 });
@@ -912,7 +926,7 @@ auth.onAuthStateChanged(user => {
     document.getElementById('admin-avatar').textContent = currentAdmin.name.charAt(0).toUpperCase();
     document.getElementById('login-view').style.display = 'none';
     document.getElementById('app-view').style.display = 'grid';
-    loadAll();
+    RBAC.init(currentAdmin.email).then(() => loadAll());
   }
 });
 
@@ -934,6 +948,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'audit') loadAuditLogs();
     if (page === 'service-control') Promise.all([loadRestrictions(), loadEnabledRegions()]).then(renderRestrictions);
     if (page === 'location-requests') loadLocationRequests().then(renderLocationRequests);
+    if (page === 'rbac') renderRBAC();
   });
 });
 
@@ -3361,8 +3376,22 @@ async function sendBroadcast() {
 }
 
 // ── Audit ──
-function logAudit(action, details) {
-  db.collection('auditLogs').add({ adminEmail: currentAdmin.email, adminName: currentAdmin.name, action, details, timestamp: firebase.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+function logAudit(action, details, module, prevValue, updatedValue) {
+  const r = (window.RBAC && RBAC.me) || null;
+  db.collection('auditLogs').add({
+    adminEmail: currentAdmin.email,
+    adminName: currentAdmin.name,
+    employeeName: (r && r.name) || currentAdmin.name,
+    role: (r && r.roleLabel) || 'Super Admin',
+    action,
+    module: module || null,
+    details,
+    ip: (window.RBAC && RBAC.clientIp) || null,
+    device: (typeof navigator !== 'undefined' && navigator.userAgent) || null,
+    previousValue: prevValue === undefined ? null : prevValue,
+    updatedValue: updatedValue === undefined ? null : updatedValue,
+    timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+  }).catch(() => {});
 }
 
 function renderAuditLogs() {
@@ -3677,6 +3706,427 @@ function empty(emoji, title, sub) {
   // Public API for programmatic open
   window.openLightbox = open;
   window.closeLightbox = close;
+})();
+</script>
+
+<!-- ════════════════════════════════════════════════════════════════════
+     ROLE-BASED ACCESS CONTROL (RBAC) — Phase 1
+     Data model + roles + permission matrix + User & Role Management UI +
+     client-side gating + enriched audit. ENFORCEMENT (locked Firestore
+     rules, Cloud Functions, custom claims, 2FA) is Phase 2 — until then the
+     gating below is UI-level only and NOT a security boundary.
+     ════════════════════════════════════════════════════════════════════ -->
+<script>
+(function () {
+  // Owners who always get full access (never lock yourself out). Edit freely.
+  const SUPER_ADMIN_EMAILS = [
+    'nagireddypranay768@gmail.com',
+    'nagireddypranay633@gmail.com',
+  ].map(s => s.toLowerCase());
+
+  const ACTIONS = [
+    { key: 'view', label: 'View' }, { key: 'create', label: 'Create' },
+    { key: 'edit', label: 'Edit' }, { key: 'delete', label: 'Delete' },
+    { key: 'approve', label: 'Approve' }, { key: 'reject', label: 'Reject' },
+    { key: 'suspend', label: 'Suspend' }, { key: 'block', label: 'Block' },
+    { key: 'export', label: 'Export' }, { key: 'import', label: 'Import' },
+    { key: 'assign', label: 'Assign' }, { key: 'manage', label: 'Manage' },
+    { key: 'full', label: 'Full Access' },
+  ];
+  const ACTION_KEYS = ACTIONS.map(a => a.key);
+
+  // module key, label, and the sidebar data-page it maps to (for gating).
+  const MODULES = [
+    { key: 'dashboard', label: 'Dashboard', nav: 'overview' },
+    { key: 'helpers', label: 'Helpers', nav: 'helpers' },
+    { key: 'users', label: 'Users', nav: 'users' },
+    { key: 'helper_verification', label: 'Helper Verification', nav: 'verification' },
+    { key: 'user_verification', label: 'User Verification' },
+    { key: 'alerts', label: 'Alerts Center', nav: 'alerts' },
+    { key: 'reports', label: 'Reports', nav: 'reports' },
+    { key: 'moderation', label: 'Moderation', nav: 'moderation' },
+    { key: 'appeals', label: 'Appeals', nav: 'appeals' },
+    { key: 'location_change_requests', label: 'Location Change Requests', nav: 'location-requests' },
+    { key: 'region_management', label: 'Region Management', nav: 'regions' },
+    { key: 'reviews', label: 'Reviews', nav: 'reviews' },
+    { key: 'user_reviews', label: 'User Reviews', nav: 'user-reviews' },
+    { key: 'service_agreements', label: 'Service Agreements', nav: 'agreements' },
+    { key: 'chats', label: 'Chats', nav: 'chats' },
+    { key: 'broadcast_notifications', label: 'Broadcast Notifications', nav: 'notifications' },
+    { key: 'push_notifications', label: 'Push Notifications' },
+    { key: 'region_operations', label: 'Region Operations', nav: 'service-control' },
+    { key: 'analytics', label: 'Analytics', nav: 'analytics' },
+    { key: 'audit_logs', label: 'Audit Logs', nav: 'audit' },
+    { key: 'issue_reports', label: 'Issue Reports' },
+    { key: 'payments', label: 'Payments' },
+    { key: 'settings', label: 'Settings' },
+    { key: 'user_role_management', label: 'User & Role Management', nav: 'rbac' },
+    { key: 'system_configuration', label: 'System Configuration' },
+    { key: 'activity_logs', label: 'Activity Logs' },
+    { key: 'ai_moderation', label: 'AI Moderation (future)' },
+    { key: 'backup_restore', label: 'Backup & Restore' },
+    { key: 'api_management', label: 'API Management (future)' },
+  ];
+  const MODULE_KEYS = MODULES.map(m => m.key);
+  const MODULE_LABEL = Object.fromEntries(MODULES.map(m => [m.key, m.label]));
+
+  function mkPerm(map) {
+    const p = {};
+    Object.keys(map).forEach(k => {
+      const acts = map[k] === '*' ? ACTION_KEYS : map[k];
+      p[k] = {}; acts.forEach(a => { p[k][a] = true; });
+    });
+    return p;
+  }
+
+  const PREDEFINED_ROLES = [
+    { id: 'super_admin', label: 'Super Admin', color: 'danger', isSuper: true, builtin: true, desc: 'Unrestricted nationwide access to everything.', permissions: {} },
+    { id: 'operations_manager', label: 'Operations Manager', color: 'primary', builtin: true, desc: 'Day-to-day operations across helpers, users, reports, alerts.', permissions: mkPerm({ dashboard:['view','export'], helpers:'*', users:'*', helper_verification:['view','approve','reject','manage'], user_verification:['view','approve','reject','manage'], alerts:'*', reports:'*', moderation:['view','approve','reject','suspend','block','manage'], appeals:['view','approve','reject','manage'], location_change_requests:['view','approve','reject','manage'], service_agreements:['view','manage'], chats:['view'], analytics:['view','export'], audit_logs:['view'] }) },
+    { id: 'helper_manager', label: 'Helper Manager', color: 'purple', builtin: true, desc: 'Manage helpers and helper verification.', permissions: mkPerm({ dashboard:['view'], helpers:['view','create','edit','approve','reject','suspend','block','manage','export'], helper_verification:['view','approve','reject','manage'] }) },
+    { id: 'user_manager', label: 'User Manager', color: 'primary', builtin: true, desc: 'Manage users and user verification.', permissions: mkPerm({ dashboard:['view'], users:['view','edit','suspend','block','manage','export'], user_verification:['view','approve','reject','manage'] }) },
+    { id: 'verification_officer', label: 'Verification Officer', color: 'info', builtin: true, desc: 'Review and decide identity verifications.', permissions: mkPerm({ dashboard:['view'], helper_verification:['view','approve','reject'], user_verification:['view','approve','reject'] }) },
+    { id: 'moderator', label: 'Moderator', color: 'warning', builtin: true, desc: 'Moderate reports, reviews and abuse.', permissions: mkPerm({ dashboard:['view'], moderation:['view','approve','reject','suspend','block','manage'], reports:['view','edit','manage'], reviews:['view','approve','reject','delete','manage'], user_reviews:['view','approve','reject','delete','manage'], appeals:['view','approve','reject'] }) },
+    { id: 'support_executive', label: 'Support Executive', color: 'info', builtin: true, desc: 'Handle support tickets and chats.', permissions: mkPerm({ dashboard:['view'], reports:['view','edit','manage'], issue_reports:['view','edit','manage'], chats:['view'], appeals:['view'] }) },
+    { id: 'regional_manager', label: 'Regional Manager', color: 'success', builtin: true, desc: 'Region-scoped management of helpers, users, reports, verifications, alerts.', regionScoped: true, permissions: mkPerm({ dashboard:['view'], helpers:['view','edit','approve','reject','manage'], users:['view','edit','manage'], reports:['view','edit','manage'], helper_verification:['view','approve','reject'], user_verification:['view','approve','reject'], alerts:['view','approve','reject','manage'] }) },
+    { id: 'review_manager', label: 'Review Manager', color: 'purple', builtin: true, desc: 'Manage reviews and user reviews.', permissions: mkPerm({ dashboard:['view'], reviews:['view','approve','reject','delete','manage'], user_reviews:['view','approve','reject','delete','manage'] }) },
+    { id: 'analytics_viewer', label: 'Analytics Viewer', color: 'info', builtin: true, desc: 'Read-only analytics and dashboard.', permissions: mkPerm({ dashboard:['view','export'], analytics:['view','export'] }) },
+    { id: 'audit_officer', label: 'Audit Officer', color: 'gray', builtin: true, desc: 'Read and export audit & activity logs.', permissions: mkPerm({ dashboard:['view'], audit_logs:['view','export'], activity_logs:['view','export'] }) },
+    { id: 'read_only_viewer', label: 'Read-Only Viewer', color: 'gray', builtin: true, desc: 'View-only access to every module.', permissions: mkPerm(Object.fromEntries(MODULE_KEYS.map(k => [k, ['view']]))) },
+  ];
+
+  const NAV_MODULE = Object.fromEntries(MODULES.filter(m => m.nav).map(m => [m.nav, m.key]));
+
+  const RBAC = {
+    me: null, roles: PREDEFINED_ROLES.slice(), customRoles: [], employees: [],
+    clientIp: null, tab: 'employees', empSearch: '',
+    isSuper() { return !!(this.me && this.me.isSuper); },
+    can(moduleKey, action) {
+      if (this.isSuper()) return true;
+      if (!this.me) return false;
+      const p = (this.me.permissions || {})[moduleKey];
+      return !!(p && (p.full || p[action]));
+    },
+    roleById(id) { return this.roles.find(r => r.id === id) || null; },
+    async init(email) {
+      const lc = (email || '').toLowerCase();
+      // best-effort client IP for the audit trail
+      if (!this.clientIp) {
+        try { const r = await fetch('https://api.ipify.org?format=json'); this.clientIp = (await r.json()).ip; } catch {}
+      }
+      // load custom roles
+      try {
+        const snap = await db.collection('adminRoles').get();
+        this.customRoles = snap.docs.map(d => ({ id: d.id, ...d.data(), builtin: false }));
+      } catch { this.customRoles = []; }
+      this.roles = PREDEFINED_ROLES.concat(this.customRoles);
+      // resolve current identity
+      let doc = null;
+      try { const s = await db.collection('adminUsers').doc(lc).get(); if (s.exists) doc = { id: s.id, ...s.data() }; } catch {}
+      if (SUPER_ADMIN_EMAILS.includes(lc)) {
+        this.me = { email: lc, name: currentAdmin.name, roleId: 'super_admin', roleLabel: 'Super Admin', isSuper: true, permissions: {}, regions: null, status: 'active' };
+      } else if (doc) {
+        if ((doc.status || 'active') !== 'active') {
+          this.me = { email: lc, name: doc.name || currentAdmin.name, roleId: doc.role, roleLabel: 'Suspended', isSuper: false, permissions: {}, regions: doc.assignedRegions || null, status: doc.status };
+          this._blockSuspended(doc.status);
+          return;
+        }
+        const role = this.roleById(doc.role) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
+        this.me = { email: lc, name: doc.name || currentAdmin.name, roleId: role.id, roleLabel: role.label, isSuper: !!role.isSuper, permissions: role.permissions || {}, regions: doc.assignedRegions || null, status: 'active' };
+        try { await db.collection('adminUsers').doc(lc).update({ lastLogin: firebase.firestore.FieldValue.serverTimestamp() }); } catch {}
+      } else {
+        // Phase 1, no enforcement: an account with no employee record behaves as
+        // it did before RBAC (full access). Phase 2's locked rules flip this to deny.
+        this.me = { email: lc, name: currentAdmin.name, roleId: 'super_admin', roleLabel: 'Super Admin', isSuper: true, permissions: {}, regions: null, status: 'active' };
+      }
+      this.applyGating();
+    },
+    _blockSuspended(status) {
+      document.getElementById('app-view').innerHTML =
+        '<div style="max-width:420px;margin:18vh auto;text-align:center;padding:32px">' +
+        '<div style="font-size:48px">🔒</div>' +
+        '<h2 style="margin:12px 0 6px">Account ' + (status === 'inactive' ? 'inactive' : 'suspended') + '</h2>' +
+        '<p style="color:var(--text-sec)">Your admin account has been ' + (status === 'inactive' ? 'deactivated' : 'suspended') + '. Contact a Super Admin.</p>' +
+        '<button class="btn btn-ghost" style="margin-top:16px" onclick="auth.signOut().then(()=>location.reload())">Sign out</button></div>';
+    },
+    applyGating() {
+      document.querySelectorAll('.nav-item[data-page]').forEach(el => {
+        const mod = NAV_MODULE[el.getAttribute('data-page')];
+        if (!mod) return; // unmapped nav items stay visible
+        el.style.display = this.can(mod, 'view') ? '' : 'none';
+      });
+      document.querySelectorAll('[data-nav-module]').forEach(el => {
+        const mod = el.getAttribute('data-nav-module');
+        el.style.display = this.can(mod, 'view') ? '' : 'none';
+      });
+    },
+  };
+  window.RBAC = RBAC;
+
+  // ── Region helpers (reuse INDIA_STATES from the main script if present) ──
+  function statesList() { return (typeof INDIA_STATES !== 'undefined' ? INDIA_STATES.map(s => s.name) : []); }
+  function districtsFor(state) {
+    try { return (typeof getDistrictsForState === 'function') ? getDistrictsForState(state) : []; } catch { return []; }
+  }
+  function regionSummary(regions) {
+    if (!regions || (!(regions.states || []).length && !(regions.districts || []).length)) return '<span class="badge badge-success">🌍 Nationwide</span>';
+    const parts = [];
+    if ((regions.states || []).length) parts.push(regions.states.slice(0, 2).join(', ') + (regions.states.length > 2 ? ' +' + (regions.states.length - 2) : ''));
+    if ((regions.districts || []).length) parts.push('(' + regions.districts.length + ' dist.)');
+    return '<span class="badge badge-info">📍 ' + parts.join(' ') + '</span>';
+  }
+  function roleBadge(roleId) {
+    const r = RBAC.roleById(roleId);
+    if (!r) return '<span class="badge badge-gray">' + (roleId || '—') + '</span>';
+    return '<span class="badge badge-' + (r.color || 'gray') + '">' + r.label + (r.builtin ? '' : ' ✦') + '</span>';
+  }
+  function permCount(perms) {
+    if (!perms) return 0;
+    return Object.keys(perms).filter(k => perms[k] && Object.keys(perms[k]).length).length;
+  }
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  // ════════ RENDER ════════
+  window.rbacSetTab = function (tab) { RBAC.tab = tab; renderRBAC(); };
+
+  window.renderRBAC = async function () {
+    document.getElementById('rbac-tab-employees-btn').className = 'btn ' + (RBAC.tab === 'employees' ? 'btn-primary' : 'btn-ghost');
+    document.getElementById('rbac-tab-roles-btn').className = 'btn ' + (RBAC.tab === 'roles' ? 'btn-primary' : 'btn-ghost');
+    if (RBAC.tab === 'employees') return renderEmployees();
+    return renderRoles();
+  };
+
+  async function renderEmployees() {
+    const root = document.getElementById('rbac-root');
+    root.innerHTML = '<div class="loading-state"><div class="spinner"></div>Loading employees…</div>';
+    try {
+      const snap = await db.collection('adminUsers').get();
+      RBAC.employees = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch { RBAC.employees = []; }
+    const canCreate = RBAC.can('user_role_management', 'create');
+    const q = (RBAC.empSearch || '').toLowerCase();
+    let list = RBAC.employees.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (q) list = list.filter(e => (e.name || '').toLowerCase().includes(q) || (e.email || '').toLowerCase().includes(q) || (e.employeeId || '').toLowerCase().includes(q) || (e.designation || '').toLowerCase().includes(q) || (e.department || '').toLowerCase().includes(q));
+
+    root.innerHTML =
+      '<div class="card">' +
+      '<div class="search-inline">' +
+      '<input type="text" id="rbac-emp-search" placeholder="Search by name, email, ID, designation, department…" value="' + esc(RBAC.empSearch) + '"/>' +
+      (canCreate ? '<button class="btn btn-primary" onclick="rbacAddEmployee()">+ Add Employee</button>' : '') +
+      '</div>' +
+      '<div class="table-wrap">' + (list.length === 0
+        ? empty('🧑‍💼', 'No employees yet', canCreate ? 'Click "Add Employee" to create one.' : 'No employee accounts match.')
+        : ('<table class="table"><thead><tr><th>Employee</th><th>Employee ID</th><th>Designation</th><th>Role</th><th>Region</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead><tbody>' +
+          list.map(e => {
+            const initials = (e.name || e.email || '?').substring(0, 2).toUpperCase();
+            const statusBadge = (e.status || 'active') === 'active' ? '<span class="badge badge-success">✅ Active</span>' : '<span class="badge badge-warning">⛔ ' + esc(e.status) + '</span>';
+            return '<tr>' +
+              '<td><div class="user-cell"><div class="user-avatar">' + (e.photoURL ? '<img src="' + esc(e.photoURL) + '" style="width:100%;height:100%;border-radius:50%;object-fit:cover"/>' : initials) + '</div>' +
+              '<div class="user-info"><div class="user-name">' + esc(e.name || 'Unnamed') + '</div><div class="user-meta">' + esc(e.email) + '</div></div></div></td>' +
+              '<td><code>' + esc(e.employeeId || '—') + '</code></td>' +
+              '<td>' + esc(e.designation || '—') + '<div class="user-meta">' + esc(e.department || '') + '</div></td>' +
+              '<td>' + roleBadge(e.role) + '</td>' +
+              '<td>' + regionSummary(e.assignedRegions) + '</td>' +
+              '<td>' + statusBadge + '</td>' +
+              '<td>' + (e.lastLogin ? fDate(e.lastLogin) : '<span class="user-meta">Never</span>') + '</td>' +
+              '<td><button class="btn btn-primary btn-sm" onclick="rbacManageEmployee(\'' + esc(e.id) + '\')">Manage</button></td>' +
+              '</tr>';
+          }).join('') + '</tbody></table>')) +
+      '</div></div>';
+    const si = document.getElementById('rbac-emp-search');
+    if (si) si.addEventListener('input', e => { RBAC.empSearch = e.target.value; clearTimeout(window._rbacEmpT); window._rbacEmpT = setTimeout(renderEmployees, 200); });
+  }
+
+  function roleOptions(selected) {
+    return RBAC.roles.map(r => '<option value="' + r.id + '"' + (r.id === selected ? ' selected' : '') + '>' + esc(r.label) + (r.builtin ? '' : ' (custom)') + '</option>').join('');
+  }
+  function regionPickerHtml(regions) {
+    regions = regions || { states: [], districts: [] };
+    const states = statesList();
+    return '<div class="modal-field"><div class="modal-label">Assigned States (leave empty = nationwide)</div>' +
+      '<div style="max-height:150px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px">' +
+      states.map(s => '<label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox" class="rbac-region-state" value="' + esc(s) + '"' + ((regions.states || []).includes(s) ? ' checked' : '') + '/> ' + esc(s) + '</label>').join('') +
+      '</div><div style="font-size:11px;color:var(--text-mute);margin-top:4px">District-level scoping refines this in Phase 2; states are enforced first.</div></div>';
+  }
+  function readRegionPicker() {
+    const states = Array.from(document.querySelectorAll('.rbac-region-state:checked')).map(c => c.value);
+    return { states, districts: [] };
+  }
+
+  window.rbacAddEmployee = function () {
+    if (!RBAC.can('user_role_management', 'create')) return showToast('Not permitted', 'error');
+    showModal(
+      '<div class="modal-header"><div class="modal-title">➕ Add Employee</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+      '<div class="modal-body">' +
+      '<div style="background:var(--info-light);padding:10px;border-radius:8px;margin-bottom:14px;font-size:12px;color:var(--info)">First create the login in Firebase Console → Authentication → Add user, then add the matching <b>email</b> here to grant a role.</div>' +
+      mfInput('Full Name *', 'rbac-f-name') + mfInput('Email * (must match the Auth login)', 'rbac-f-email', 'email') +
+      mfInput('Phone', 'rbac-f-phone') + mfInput('Employee ID', 'rbac-f-empid') +
+      mfInput('Designation', 'rbac-f-desig') + mfInput('Department', 'rbac-f-dept') +
+      mfInput('Profile Picture URL', 'rbac-f-photo') +
+      '<div class="modal-field"><div class="modal-label">Role *</div><select id="rbac-f-role" class="form-select">' + roleOptions('read_only_viewer') + '</select></div>' +
+      regionPickerHtml(null) +
+      '</div>' +
+      '<div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="rbacSaveEmployee(null)">Create Employee</button></div>'
+    );
+  };
+
+  window.rbacManageEmployee = function (id) {
+    const e = RBAC.employees.find(x => x.id === id); if (!e) return;
+    const canEdit = RBAC.can('user_role_management', 'edit');
+    const canDelete = RBAC.can('user_role_management', 'delete');
+    const active = (e.status || 'active') === 'active';
+    showModal(
+      '<div class="modal-header"><div class="modal-title">👤 ' + esc(e.name || 'Employee') + '</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+      '<div class="modal-body">' +
+      mfInput('Full Name', 'rbac-f-name', 'text', e.name) + mf('Email', '<code>' + esc(e.email) + '</code>') +
+      mfInput('Phone', 'rbac-f-phone', 'text', e.phone) + mfInput('Employee ID', 'rbac-f-empid', 'text', e.employeeId) +
+      mfInput('Designation', 'rbac-f-desig', 'text', e.designation) + mfInput('Department', 'rbac-f-dept', 'text', e.department) +
+      mfInput('Profile Picture URL', 'rbac-f-photo', 'text', e.photoURL) +
+      '<div class="modal-field"><div class="modal-label">Role</div><select id="rbac-f-role" class="form-select"' + (canEdit ? '' : ' disabled') + '>' + roleOptions(e.role) + '</select></div>' +
+      regionPickerHtml(e.assignedRegions) +
+      mf('Created', e.createdAt ? fDate(e.createdAt) : '—') + mf('Last Login', e.lastLogin ? fDate(e.lastLogin) : 'Never') +
+      '</div>' +
+      '<div class="modal-footer">' +
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="rbacResetPassword(\'' + esc(e.email) + '\')">✉️ Reset Password</button>' +
+      (canEdit ? (active
+        ? '<button class="btn btn-warning btn-sm" onclick="rbacSetStatus(\'' + esc(id) + '\',\'suspended\')">⛔ Suspend</button>'
+        : '<button class="btn btn-success btn-sm" onclick="rbacSetStatus(\'' + esc(id) + '\',\'active\')">✅ Activate</button>') : '') +
+      (canDelete ? '<button class="btn btn-danger btn-sm" onclick="rbacDeleteEmployee(\'' + esc(id) + '\')">🗑 Delete</button>' : '') +
+      (canEdit ? '<button class="btn btn-primary" onclick="rbacSaveEmployee(\'' + esc(id) + '\')">💾 Save</button>' : '') +
+      '</div>'
+    );
+  };
+
+  window.rbacSaveEmployee = async function (id) {
+    const val = i => (document.getElementById(i) ? document.getElementById(i).value.trim() : '');
+    const name = val('rbac-f-name'), email = (id ? null : val('rbac-f-email').toLowerCase());
+    const role = document.getElementById('rbac-f-role').value;
+    if (!id && (!name || !email)) return showToast('Name and email are required', 'error');
+    if (!id && !/.+@.+\..+/.test(email)) return showToast('Enter a valid email', 'error');
+    const payload = {
+      name, phone: val('rbac-f-phone'), employeeId: val('rbac-f-empid'),
+      designation: val('rbac-f-desig'), department: val('rbac-f-dept'),
+      photoURL: val('rbac-f-photo'), role, assignedRegions: readRegionPicker(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: currentAdmin.email,
+    };
+    try {
+      if (id) {
+        const before = RBAC.employees.find(x => x.id === id) || {};
+        await db.collection('adminUsers').doc(id).set(payload, { merge: true });
+        logAudit('Update employee', name + ' (' + id + ')', 'user_role_management', { role: before.role, status: before.status }, { role });
+      } else {
+        payload.email = email; payload.status = 'active';
+        payload.createdAt = firebase.firestore.FieldValue.serverTimestamp(); payload.createdBy = currentAdmin.email;
+        await db.collection('adminUsers').doc(email).set(payload);
+        logAudit('Create employee', name + ' (' + email + ') as ' + role, 'user_role_management', null, { email, role });
+      }
+      showToast('✅ Employee saved', 'success'); closeModal(); renderEmployees();
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+  };
+  window.rbacSetStatus = async function (id, status) {
+    try {
+      await db.collection('adminUsers').doc(id).update({ status, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: currentAdmin.email });
+      logAudit(status === 'active' ? 'Activate employee' : 'Suspend employee', id, 'user_role_management', null, { status });
+      showToast('✅ Status updated', 'success'); closeModal(); renderEmployees();
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+  };
+  window.rbacDeleteEmployee = async function (id) {
+    if (!confirm('Remove this employee\'s role & profile?\n\nNote: this does NOT delete their Firebase Auth login — disable that in Firebase Console if needed.')) return;
+    try {
+      await db.collection('adminUsers').doc(id).delete();
+      logAudit('Delete employee', id, 'user_role_management', { id }, null);
+      showToast('Employee removed', 'success'); closeModal(); renderEmployees();
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+  };
+  window.rbacResetPassword = async function (email) {
+    if (!confirm('Send a password-reset email to ' + email + '?')) return;
+    try { await auth.sendPasswordResetEmail(email); logAudit('Send password reset', email, 'user_role_management'); showToast('✅ Reset email sent', 'success'); }
+    catch (e) { showToast('Error: ' + e.message, 'error'); }
+  };
+
+  // ════════ ROLES ════════
+  function renderRoles() {
+    const root = document.getElementById('rbac-root');
+    const canCreate = RBAC.can('user_role_management', 'create');
+    root.innerHTML =
+      '<div class="card"><div class="search-inline"><div style="flex:1;font-size:12px;color:var(--text-sec)">Built-in roles are read-only. Create custom roles for granular needs.</div>' +
+      (canCreate ? '<button class="btn btn-primary" onclick="rbacEditRole(null)">+ Create Role</button>' : '') + '</div>' +
+      '<div class="card-body"><div class="region-grid">' +
+      RBAC.roles.map(r => {
+        const acts = !r.isSuper ? Object.values(r.permissions || {}).reduce((n, p) => n + Object.keys(p).length, 0) : '∞';
+        return '<div class="region-card" onclick="rbacViewRole(\'' + r.id + '\')">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center"><span class="badge badge-' + (r.color || 'gray') + '">' + esc(r.label) + '</span>' + (r.builtin ? '<span class="badge badge-gray" style="font-size:9px">Built-in</span>' : '<span class="badge badge-primary" style="font-size:9px">Custom</span>') + '</div>' +
+          '<div style="font-size:12px;color:var(--text-sec);margin:8px 0;min-height:32px">' + esc(r.desc || '') + '</div>' +
+          '<div class="region-stats"><div class="region-stat"><span class="region-stat-val">' + (r.isSuper ? '29' : permCount(r.permissions)) + '</span>Modules</div><div class="region-stat"><span class="region-stat-val">' + acts + '</span>Permissions</div></div>' +
+          '</div>';
+      }).join('') + '</div></div></div>';
+  }
+  window.rbacViewRole = function (id) {
+    const r = RBAC.roleById(id); if (!r) return;
+    const canEdit = !r.builtin && RBAC.can('user_role_management', 'edit');
+    showModal(
+      '<div class="modal-header"><div class="modal-title">🎭 ' + esc(r.label) + '</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+      '<div class="modal-body">' + (r.isSuper ? '<div class="modal-value">Full unrestricted access to all modules and actions.</div>' : permMatrixView(r.permissions)) + '</div>' +
+      '<div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+      (canEdit ? '<button class="btn btn-primary" onclick="rbacEditRole(\'' + id + '\')">✏️ Edit</button>' : '') +
+      (!r.builtin && RBAC.can('user_role_management', 'delete') ? '<button class="btn btn-danger" onclick="rbacDeleteRole(\'' + id + '\')">🗑 Delete</button>' : '') + '</div>'
+    );
+  };
+  function permMatrixView(perms) {
+    perms = perms || {};
+    return MODULES.filter(m => perms[m.key] && Object.keys(perms[m.key]).length).map(m =>
+      '<div style="padding:8px 0;border-bottom:1px solid var(--border)"><b>' + esc(m.label) + '</b>: ' +
+      ACTIONS.filter(a => perms[m.key][a.key]).map(a => '<span class="badge badge-success" style="font-size:9px;margin:2px">' + a.label + '</span>').join('') +
+      '</div>').join('') || '<div class="modal-value">No permissions assigned.</div>';
+  }
+  window.rbacEditRole = function (id) {
+    if (!RBAC.can('user_role_management', id ? 'edit' : 'create')) return showToast('Not permitted', 'error');
+    const r = id ? RBAC.roleById(id) : { label: '', desc: '', color: 'primary', permissions: {} };
+    if (id && r.builtin) return showToast('Built-in roles cannot be edited', 'error');
+    const perms = JSON.parse(JSON.stringify(r.permissions || {}));
+    const body = MODULES.map(m =>
+      '<details style="border:1px solid var(--border);border-radius:8px;margin-bottom:6px"><summary style="padding:8px 12px;cursor:pointer;font-weight:700">' + esc(m.label) + '</summary>' +
+      '<div style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:10px">' +
+      ACTIONS.map(a => '<label style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" class="rbac-perm" data-m="' + m.key + '" data-a="' + a.key + '"' + ((perms[m.key] && perms[m.key][a.key]) ? ' checked' : '') + '/> ' + a.label + '</label>').join('') +
+      '</div></details>').join('');
+    showModal(
+      '<div class="modal-header"><div class="modal-title">' + (id ? '✏️ Edit Role' : '🎭 Create Role') + '</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+      '<div class="modal-body">' + mfInput('Role Name *', 'rbac-role-name', 'text', r.label) + mfInput('Description', 'rbac-role-desc', 'text', r.desc) +
+      '<div class="modal-field"><div class="modal-label">Badge Colour</div><select id="rbac-role-color" class="form-select">' + ['primary', 'success', 'warning', 'danger', 'info', 'purple', 'gray'].map(c => '<option value="' + c + '"' + (c === r.color ? ' selected' : '') + '>' + c + '</option>').join('') + '</select></div>' +
+      '<div class="modal-label" style="margin-top:8px">Module Permissions</div>' + body + '</div>' +
+      '<div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="rbacSaveRole(' + (id ? '\'' + id + '\'' : 'null') + ')">💾 Save Role</button></div>'
+    );
+  };
+  window.rbacSaveRole = async function (id) {
+    const label = document.getElementById('rbac-role-name').value.trim();
+    if (!label) return showToast('Role name required', 'error');
+    const perms = {};
+    document.querySelectorAll('.rbac-perm:checked').forEach(c => { const m = c.getAttribute('data-m'), a = c.getAttribute('data-a'); perms[m] = perms[m] || {}; perms[m][a] = true; });
+    const payload = { label, desc: document.getElementById('rbac-role-desc').value.trim(), color: document.getElementById('rbac-role-color').value, permissions: perms, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: currentAdmin.email };
+    try {
+      if (id) { await db.collection('adminRoles').doc(id).set(payload, { merge: true }); logAudit('Update role', label, 'user_role_management'); }
+      else { payload.createdAt = firebase.firestore.FieldValue.serverTimestamp(); payload.createdBy = currentAdmin.email; await db.collection('adminRoles').add(payload); logAudit('Create role', label, 'user_role_management', null, { label }); }
+      // refresh roles cache
+      const snap = await db.collection('adminRoles').get();
+      RBAC.customRoles = snap.docs.map(d => ({ id: d.id, ...d.data(), builtin: false }));
+      RBAC.roles = PREDEFINED_ROLES.concat(RBAC.customRoles);
+      showToast('✅ Role saved', 'success'); closeModal(); renderRoles();
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+  };
+  window.rbacDeleteRole = async function (id) {
+    if (!confirm('Delete this custom role? Employees assigned to it will fall back to view-only.')) return;
+    try {
+      await db.collection('adminRoles').doc(id).delete(); logAudit('Delete role', id, 'user_role_management');
+      RBAC.roles = PREDEFINED_ROLES.concat(RBAC.customRoles.filter(r => r.id !== id));
+      RBAC.customRoles = RBAC.customRoles.filter(r => r.id !== id);
+      showToast('Role deleted', 'success'); closeModal(); renderRoles();
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+  };
+
+  // small helper for labelled inputs (mirrors the dashboard's mf())
+  function mfInput(label, id, type, val) {
+    return '<div class="modal-field"><div class="modal-label">' + label + '</div><input type="' + (type || 'text') + '" id="' + id + '" class="form-input" value="' + esc(val || '') + '"/></div>';
+  }
 })();
 </script>
 
