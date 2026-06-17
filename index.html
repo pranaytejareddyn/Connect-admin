@@ -926,7 +926,9 @@ document.getElementById('login-btn').addEventListener('click', async () => {
       document.getElementById('admin-name').textContent = currentAdmin.name;
       document.getElementById('admin-avatar').textContent = currentAdmin.name.charAt(0).toUpperCase();
       document.getElementById('login-view').style.display = 'none';
-      document.getElementById('app-view').style.display = 'grid';
+      // Show a branded loader and keep the dashboard hidden until RBAC.init has
+      // fully resolved + applied gating — prevents the all-modules flash.
+      showRbacLoading();
       RBAC.init(currentAdmin.email).then(() => loadAll());
     })
     .catch(e => { errBox.textContent = 'Login failed: ' + (e.message || 'Invalid credentials'); errBox.style.display = 'block'; });
@@ -939,10 +941,31 @@ auth.onAuthStateChanged(user => {
     document.getElementById('admin-name').textContent = currentAdmin.name;
     document.getElementById('admin-avatar').textContent = currentAdmin.name.charAt(0).toUpperCase();
     document.getElementById('login-view').style.display = 'none';
-    document.getElementById('app-view').style.display = 'grid';
+    showRbacLoading();
     RBAC.init(currentAdmin.email).then(() => loadAll());
   }
 });
+
+// ── Branded permission-loading screen (shown until RBAC is resolved) ──
+function showRbacLoading() {
+  let el = document.getElementById('rbac-loading');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'rbac-loading';
+    el.style.cssText = 'position:fixed;inset:0;z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#0F172A 0%,#1E3A8A 100%);color:#fff;font-family:Inter,-apple-system,sans-serif';
+    el.innerHTML =
+      '<div style="width:64px;height:64px;border-radius:16px;background:#2563EB;display:flex;align-items:center;justify-content:center;font-size:32px;margin-bottom:18px">🛡️</div>' +
+      '<div style="font-size:20px;font-weight:800;letter-spacing:-0.3px">Connect Admin</div>' +
+      '<div style="font-size:13px;color:#CBD5E1;margin:6px 0 20px">Loading your workspace &amp; permissions…</div>' +
+      '<div style="width:30px;height:30px;border:3px solid rgba(255,255,255,0.25);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite"></div>';
+    document.body.appendChild(el);
+  }
+  el.style.display = 'flex';
+}
+function hideRbacLoading() {
+  const el = document.getElementById('rbac-loading');
+  if (el) el.style.display = 'none';
+}
 
 function showAdminMenu() {
   if (confirm('Sign out of admin dashboard?')) auth.signOut().then(() => location.reload());
@@ -3856,29 +3879,31 @@ function empty(emoji, title, sub) {
     roleById(id) { return this.roles.find(r => r.id === id) || null; },
     async init(email) {
       const lc = (email || '').toLowerCase();
-      // best-effort client IP for the audit trail
+      // Client IP is for the audit trail ONLY — fire-and-forget so it never
+      // blocks permission resolution (awaiting it was a big cause of the delay).
       if (!this.clientIp) {
-        try { const r = await fetch('https://api.ipify.org?format=json'); this.clientIp = (await r.json()).ip; } catch {}
+        fetch('https://api.ipify.org?format=json').then(r => r.json()).then(j => { this.clientIp = j.ip; }).catch(() => {});
       }
-      // load custom roles
-      try {
-        const snap = await db.collection('adminRoles').get();
-        this.customRoles = snap.docs.map(d => ({ id: d.id, ...d.data(), builtin: false }));
-      } catch { this.customRoles = []; }
+      // Run the independent lookups in PARALLEL (custom roles, claims bootstrap,
+      // the employee doc) instead of one-after-another.
+      const [rolesSnap, , docResult] = await Promise.all([
+        db.collection('adminRoles').get().catch(() => null),
+        (async () => { try { await callFn('bootstrapAdminClaims'); } catch (e) { console.log('bootstrap claims:', e && e.message); } })(),
+        db.collection('adminUsers').doc(lc).get().then(s => s.exists ? { id: s.id, ...s.data() } : null).catch(() => 'ERROR'),
+      ]);
+      this.customRoles = rolesSnap ? rolesSnap.docs.map(d => ({ id: d.id, ...d.data(), builtin: false })) : [];
       this.roles = PREDEFINED_ROLES.concat(this.customRoles);
-      // Sync + read custom claims — the authoritative role source once Phase-2
-      // rules are live. Safe no-op if the function isn't reachable yet.
+      // Read custom claims AFTER bootstrap has resolved (it's awaited above).
       let claims = {};
-      try { await callFn('bootstrapAdminClaims'); } catch (e) { console.log('bootstrap claims:', e && e.message); }
       try { const tok = auth.currentUser && await auth.currentUser.getIdTokenResult(true); claims = (tok && tok.claims) || {}; } catch {}
       this.claims = claims;
-      // First-login / forced password change gate — the employee must replace
-      // their temporary password before any dashboard access.
-      if (claims && claims.mustChangePassword === true) { this._forcePasswordGate(); return; }
+      // First-login / forced password change gate — must change before any access.
+      if (claims && claims.mustChangePassword === true) { hideRbacLoading(); this._forcePasswordGate(); return; }
       this.setupIdleTimeout();
-      // resolve current identity
-      let doc = null;
-      try { const s = await db.collection('adminUsers').doc(lc).get(); if (s.exists) doc = { id: s.id, ...s.data() }; } catch {}
+
+      const docFailed = docResult === 'ERROR';
+      const doc = docFailed ? null : docResult;
+
       if (SUPER_ADMIN_EMAILS.includes(lc) || claims.superAdmin === true) {
         this.me = { email: lc, name: (doc && doc.name) || currentAdmin.name, roleId: 'super_admin', roleLabel: 'Super Admin', isSuper: true, permissions: {}, regions: null, status: 'active' };
       } else if (doc) {
@@ -3889,15 +3914,33 @@ function empty(emoji, title, sub) {
         }
         const role = this.roleById(claims.role || doc.role) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
         this.me = { email: lc, name: doc.name || currentAdmin.name, roleId: role.id, roleLabel: role.label, isSuper: !!role.isSuper, permissions: effectivePerms(role, doc), regions: doc.assignedRegions || null, status: 'active' };
-        // lastLogin is stamped server-side by bootstrapAdminClaims (adminUsers is
-        // write-locked to Cloud Functions now).
+      } else if (docFailed) {
+        // Transient failure reading the profile — FAIL SAFE: use last-known
+        // cached (restricted) permissions, else view-only. NEVER grant full
+        // access on an error.
+        const cached = this._readCache(lc);
+        const role = (cached && this.roleById(cached.roleId)) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
+        this.me = { email: lc, name: (cached && cached.name) || currentAdmin.name, roleId: role.id, roleLabel: role.label, isSuper: false, permissions: (cached && cached.permissions) || role.permissions || {}, regions: null, status: 'active' };
       } else {
-        // Phase 1, no enforcement: an account with no employee record behaves as
-        // it did before RBAC (full access). Phase 2's locked rules flip this to deny.
+        // No employee record at all → Phase-1 fallback (full access), unchanged.
         this.me = { email: lc, name: currentAdmin.name, roleId: 'super_admin', roleLabel: 'Super Admin', isSuper: true, permissions: {}, regions: null, status: 'active' };
       }
-      this.applyGating();
+      this.applyGating();   // hide unauthorized nav BEFORE anything is shown
+      this._reveal();       // only now reveal the (already-gated) dashboard
+      this._cacheMe(lc);
       if (this.me && !this.me.isSuper) this._watchSelf(lc);
+    },
+    _reveal() {
+      hideRbacLoading();
+      document.getElementById('login-view').style.display = 'none';
+      const av = document.getElementById('app-view');
+      if (av) av.style.display = 'grid';
+    },
+    _cacheMe(lc) {
+      try { localStorage.setItem('rbac:me:' + lc, JSON.stringify({ roleId: this.me.roleId, permissions: this.me.permissions, isSuper: this.me.isSuper, name: this.me.name, at: Date.now() })); } catch {}
+    },
+    _readCache(lc) {
+      try { return JSON.parse(localStorage.getItem('rbac:me:' + lc) || 'null'); } catch { return null; }
     },
     pageModule(page) { return NAV_MODULE[page] || null; },
     canViewPage(page) { const m = this.pageModule(page); return !m || this.can(m, 'view'); },
@@ -3933,7 +3976,10 @@ function empty(emoji, title, sub) {
       }, () => {});
     },
     _blockSuspended(status) {
-      document.getElementById('app-view').innerHTML =
+      hideRbacLoading();
+      const _av = document.getElementById('app-view');
+      _av.style.display = 'block';
+      _av.innerHTML =
         '<div style="max-width:420px;margin:18vh auto;text-align:center;padding:32px">' +
         '<div style="font-size:48px">🔒</div>' +
         '<h2 style="margin:12px 0 6px">Account ' + (status === 'inactive' ? 'inactive' : 'suspended') + '</h2>' +
@@ -3941,6 +3987,7 @@ function empty(emoji, title, sub) {
         '<button class="btn btn-ghost" style="margin-top:16px" onclick="auth.signOut().then(()=>location.reload())">Sign out</button></div>';
     },
     _forcePasswordGate() {
+      hideRbacLoading();
       document.getElementById('login-view').style.display = 'none';
       const av = document.getElementById('app-view');
       av.style.display = 'block';
