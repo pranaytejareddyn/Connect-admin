@@ -3922,13 +3922,45 @@ function empty(emoji, title, sub) {
         const role = (cached && this.roleById(cached.roleId)) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
         this.me = { email: lc, name: (cached && cached.name) || currentAdmin.name, roleId: role.id, roleLabel: role.label, isSuper: false, permissions: (cached && cached.permissions) || role.permissions || {}, regions: null, status: 'active' };
       } else {
-        // No employee record at all → Phase-1 fallback (full access), unchanged.
-        this.me = { email: lc, name: currentAdmin.name, roleId: 'super_admin', roleLabel: 'Super Admin', isSuper: true, permissions: {}, regions: null, status: 'active' };
+        // No employee record AND not an allow-listed Super Admin → NO ACCESS.
+        // A deleted employee whose Auth session lingers lands here. (This used
+        // to grant full access under the Phase-1 transition — closed now.)
+        hideRbacLoading();
+        this._forceSignOut('Your account is not authorized for the admin dashboard.');
+        return;
       }
       this.applyGating();   // hide unauthorized nav BEFORE anything is shown
       this._reveal();       // only now reveal the (already-gated) dashboard
       this._cacheMe(lc);
       if (this.me && !this.me.isSuper) this._watchSelf(lc);
+      this._startSessionWatch();
+    },
+    // Hard sign-out: clear cache, notify, drop to the login screen.
+    _forceSignOut(msg) {
+      if (this._signingOut) return;
+      this._signingOut = true;
+      try { if (this._selfUnsub) this._selfUnsub(); } catch {}
+      try { clearInterval(this._sessionTimer); } catch {}
+      try { localStorage.removeItem('rbac:me:' + ((this.me && this.me.email) || '')); } catch {}
+      try { showToast(msg || 'Your session has ended.', 'error'); } catch {}
+      setTimeout(() => { auth.signOut().then(() => location.reload()).catch(() => location.reload()); }, 600);
+    },
+    // 30s safety net: force a token refresh; if the account was deleted/disabled/
+    // suspended or its sessions were revoked, the refresh fails → sign out.
+    // (Real-time doc changes are handled instantly by _watchSelf; this is the
+    // backstop that guarantees logout within 30s for token-revoking actions.)
+    _startSessionWatch() {
+      if (this._sessionTimer) return;
+      this._sessionTimer = setInterval(async () => {
+        const u = auth.currentUser;
+        if (!u || this._signingOut) return;
+        try {
+          await u.getIdToken(true);
+        } catch (e) {
+          if (e && e.code === 'auth/network-request-failed') return; // transient, ignore
+          this._forceSignOut('Your session has ended. Please sign in again.');
+        }
+      }, 30000);
     },
     _reveal() {
       hideRbacLoading();
@@ -3966,7 +3998,7 @@ function empty(emoji, title, sub) {
     _watchSelf(lc) {
       if (this._selfUnsub) return;
       this._selfUnsub = db.collection('adminUsers').doc(lc).onSnapshot(s => {
-        if (!s.exists) return;
+        if (!s.exists) { this._forceSignOut('Your account has been removed.'); return; }
         const doc = s.data();
         if ((doc.status || 'active') !== 'active') { this._blockSuspended(doc.status); return; }
         const role = this.roleById(doc.role) || PREDEFINED_ROLES.find(r => r.id === 'read_only_viewer');
