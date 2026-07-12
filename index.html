@@ -2102,6 +2102,16 @@ function viewHelper(id) {
     ? (h.languages || []).map(l => `<span class="badge badge-info" style="margin-right:4px;margin-bottom:4px;display:inline-block">${l}</span>`).join('')
     : '—';
 
+  // Helper Gallery — showcase photos with per-image removal (mandatory reason).
+  const galleryArr = Array.isArray(h.gallery) ? h.gallery : [];
+  const galleryHtml = galleryArr.length === 0
+    ? `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);text-align:center;color:var(--text-mute);font-size:13px">No gallery images uploaded.</div>`
+    : `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${galleryArr.map((url, i) => `
+        <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg-alt)">
+          <div class="lb-thumb" style="display:block;cursor:zoom-in"><img src="${url}" style="width:100%;height:120px;object-fit:cover;display:block"/></div>
+          <button class="btn btn-danger btn-sm" style="width:100%;border-radius:0;border:none" onclick="removeGalleryImage('${h.id}', ${i})">🗑 Remove</button>
+        </div>`).join('')}</div>`;
+
   // Header avatar (selfie circle).
   const initials = (h.name || '?').substring(0, 2).toUpperCase();
   const headerAvatar = selfieUrl
@@ -2165,6 +2175,10 @@ function viewHelper(id) {
       <div class="modal-section-header">🛠️ Services Offered</div>
       ${mf('Selected Services', skillsChips)}
       ${mf('Pricing', h.pricingType === 'free' ? '💚 Free' : `💰 ₹${h.hourlyRate || 0}/hr`)}
+
+      <!-- Helper Gallery -->
+      <div class="modal-section-header">🖼️ Helper Gallery (${galleryArr.length})</div>
+      ${galleryHtml}
 
       <!-- Document Verification -->
       <div class="modal-section-header">📄 Document Verification</div>
@@ -3413,6 +3427,47 @@ async function sendBroadcast() {
   showToast(`✅ Broadcast sent to ${sent} recipients`, 'success');
   document.getElementById('bc-title').value = '';
   document.getElementById('bc-body').value = '';
+}
+
+// ── Helper Gallery moderation ──
+async function removeGalleryImage(helperId, index) {
+  const h = helpers.find(x => x.id === helperId);
+  if (!h) return;
+  const gallery = Array.isArray(h.gallery) ? h.gallery.slice() : [];
+  const url = gallery[index];
+  if (!url) return;
+  const reason = (prompt('Reason for removing this gallery image (required):') || '').trim();
+  if (!reason) { alert('A reason is required to remove a gallery image.'); return; }
+  try {
+    const next = gallery.filter((_, i) => i !== index);
+    await db.collection('helpers').doc(helperId).update({
+      gallery: next,
+      galleryModeratedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      galleryModeratedBy: currentAdmin.email || 'Admin',
+    });
+    // Persist an auditable moderation record (reason stored in the DB).
+    await db.collection('galleryModerations').add({
+      helperId, imageUrl: url, reason,
+      adminEmail: currentAdmin.email || 'Admin',
+      removedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    logAudit('Removed gallery image', `Helper ${h.name || helperId} — reason: ${reason}`, 'Helper Gallery Moderation', url, null);
+    // Notify the helper: which image was removed, why, and replacement guidance.
+    await db.collection('notifications').add({
+      userId: helperId,
+      type: 'admin_action',
+      title: '🖼️ Gallery image removed',
+      body: `An admin removed 1 photo from your Helper Gallery. Reason: ${reason}. You can upload a replacement image from your profile → Helper Gallery.`,
+      data: { screen: 'HelperGallery' },
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    h.gallery = next;       // optimistic local update
+    viewHelper(helperId);   // re-render the modal to reflect removal
+  } catch (e) {
+    console.error('Remove gallery image failed:', e);
+    alert('Could not remove the image. Please try again.');
+  }
 }
 
 // ── Audit ──
