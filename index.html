@@ -2764,6 +2764,18 @@ function viewAgreement(id) {
       ${mf('Materials Included', a.materialsIncluded ? '✅ Yes' : '❌ No')}
       ${mf('Transport Included', a.transportIncluded ? '✅ Yes' : '❌ No')}
       ${a.notes ? mf('Notes', a.notes) : ''}
+      ${a.accommodation ? `
+      <div class="modal-section-header">🏠 Accommodation Details</div>
+      ${mf('Type', ({home_stay:'Home Stay',private_room:'Private Room',shared_room:'Shared Room',other:'Other'}[a.accommodation.accType] || a.accommodation.accType || '—'))}
+      ${mf('Check-in', `${a.accommodation.checkInDate || '—'}${a.accommodation.checkInTime ? ' · ' + a.accommodation.checkInTime : ''}`)}
+      ${mf('Check-out', `${a.accommodation.checkOutDate || '—'}${a.accommodation.checkOutTime ? ' · ' + a.accommodation.checkOutTime : ''}`)}
+      ${mf('Guests', a.accommodation.guests || '—')}
+      ${mf('Purpose', a.accommodation.purpose || '—')}
+      ${(a.accommodation.servicesNeeded && a.accommodation.servicesNeeded.length) ? mf('Services', a.accommodation.servicesNeeded.map(s => ({meals:'Meals',airport_pickup:'Airport Pickup',local_transport:'Local Transportation',laundry:'Laundry',wifi:'Wi-Fi',housekeeping:'Housekeeping',local_guide:'Local Guide',parking:'Parking',other:'Other'}[s] || s)).join(', ')) : ''}
+      ${a.accommodation.specialRequests ? mf('Special Requests', a.accommodation.specialRequests) : ''}
+      ${a.accommodation.noteToHost ? mf('Note to Host', a.accommodation.noteToHost) : ''}
+      ${mf('Estimated Budget', a.accommodation.budget ? `₹${parseFloat(a.accommodation.budget).toLocaleString('en-IN')}` : 'Not specified')}
+      ` : ''}
       <div class="modal-section-header">⏱️ Timeline</div>
       ${mf('Created', fDate(a.createdAt))}
       ${a.userAcceptedAt ? mf('User Accepted', `✅ ${fDate(a.userAcceptedAt)}`) : ''}
