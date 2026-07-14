@@ -1241,6 +1241,7 @@ function loadAll() {
   // ── enabledRegions (no sort — it's a config registry, not a timeline) ──
   unsubscribers.push(db.collection('enabledRegions').onSnapshot(snap => {
     enabledRegions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    ensureDefaultTelanganaRegion();   // persist Telangana as a REAL doc if missing
     renderRestrictions();
   }, err => console.log('enabledRegions listener error:', err)));
 
@@ -2823,6 +2824,29 @@ function resolveAgreementDispute(id) {
 </script>
 
 <script>
+// Telangana is the launch/home state. Historically the dashboard showed it as a
+// synthetic "System (default)" row that was NEVER written to Firestore — so the
+// mobile app (which lists active states purely from real enabledRegions docs)
+// never saw it, and after the app's hardcoded fallback was removed it vanished
+// from "Where Find My Local is Active", leaving only Andhra Pradesh. Persist it
+// once as a REAL doc with a fixed id so BOTH the admin and the app read every
+// active state uniformly from the same source, with zero hardcoding in the app.
+let _telanganaSeedAttempted = false;
+function ensureDefaultTelanganaRegion() {
+  if (_telanganaSeedAttempted) return;
+  const exists = enabledRegions.some(r =>
+    (r.state || '').toLowerCase() === 'telangana' && !(r.district || '').trim());
+  _telanganaSeedAttempted = true;
+  if (exists) return;
+  db.collection('enabledRegions').doc('default-telangana').set({
+    state: 'Telangana', district: '', status: 'active',
+    enabledBy: 'System (default)',
+    enabledAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true })
+    .then(() => console.log('Seeded default Telangana enabledRegions doc'))
+    .catch(e => console.log('Telangana seed failed:', e));
+}
+
 // ── Region Operations Center ──
 function renderRestrictions() {
   if (!document.getElementById('restriction-stats')) return;
@@ -2836,14 +2860,18 @@ function renderRestrictions() {
     if (aud === 'helpers' || aud === 'both') affectedHelpers += helpers.filter(matchUser).length;
   });
   document.getElementById('restriction-stats').innerHTML = [
-    { label: 'Enabled Regions', val: enabledRegions.length + 1, icon: '🌍', bg: 'success' },
+    { label: 'Enabled Regions', val: enabledRegions.length, icon: '🌍', bg: 'success' },
     { label: 'Active Restrictions', val: active.length, icon: '🚧', bg: 'danger' },
     { label: 'Affected Users', val: affectedUsers, icon: '👥', bg: 'info' },
     { label: 'Affected Helpers', val: affectedHelpers, icon: '🛡️', bg: 'purple' },
   ].map(s => `<div class="stat-card"><div class="stat-card-head"><div class="stat-label">${s.label}</div><div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div></div><div class="stat-value">${s.val}</div></div>`).join('');
 
-  const allRegions = [{ id: '__telangana__', state: 'Telangana', district: '', status: 'active', enabledBy: 'System (default)', autoEnabled: true }, ...enabledRegions];
-  document.getElementById('enabled-regions-table').innerHTML = `<table class="table"><thead><tr><th>State</th><th>District / City</th><th>Status</th><th>Enabled By</th><th>When</th><th>Actions</th></tr></thead><tbody>` + allRegions.map(r => {
+  // Render purely from real enabledRegions docs (Telangana is now persisted as
+  // one via ensureDefaultTelanganaRegion — no synthetic in-memory row).
+  const allRegions = enabledRegions;
+  document.getElementById('enabled-regions-table').innerHTML = allRegions.length === 0
+    ? empty('🌍', 'No regions enabled yet', 'Enable a state below to let users register there')
+    : `<table class="table"><thead><tr><th>State</th><th>District / City</th><th>Status</th><th>Enabled By</th><th>When</th><th>Actions</th></tr></thead><tbody>` + allRegions.map(r => {
     const cfg = REGION_STATUS_LABELS[r.status] || REGION_STATUS_LABELS.disabled;
     return `<tr>
       <td><strong>${r.state || '—'}</strong></td>
