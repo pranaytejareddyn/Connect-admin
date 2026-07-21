@@ -371,6 +371,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-item" data-page="reviews"><span class="nav-icon">⭐</span>Reviews</div>
     <div class="nav-item" data-page="user-reviews"><span class="nav-icon">🧑‍⚖️</span>User Reviews</div>
     <div class="nav-item" data-page="agreements"><span class="nav-icon">📋</span>Agreements <span class="nav-badge" id="badge-agreements" style="display:none">0</span></div>
+    <div class="nav-item" data-page="work"><span class="nav-icon">💼</span>Work Posts <span class="nav-badge" id="badge-work" style="display:none">0</span></div>
     <div class="nav-item" data-page="chats"><span class="nav-icon">💬</span>Chats</div>
     <div class="nav-section">System</div>
     <div class="nav-item" data-page="notifications"><span class="nav-icon">🔔</span>Broadcasts</div>
@@ -656,6 +657,33 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         </div>
       </div>
 
+      <!-- WORK POSTS -->
+      <div class="page" id="page-work">
+        <div class="page-head">
+          <div><div class="page-title">Work Posts</div><div class="page-sub">User-posted jobs — moderation &amp; analytics</div></div>
+        </div>
+        <div id="work-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px"></div>
+        <div class="card">
+          <div class="filter-bar" id="work-filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="active">🟢 Active</button>
+            <button class="filter-btn" data-filter="completed">🎉 Completed</button>
+            <button class="filter-btn" data-filter="closed">🚫 Closed</button>
+            <button class="filter-btn" data-filter="expired">⌛ Expired</button>
+            <button class="filter-btn" data-filter="draft">📝 Draft</button>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;padding:0 4px 12px">
+            <input id="work-search" placeholder="Search title / user / district…" oninput="renderWorkPosts()"
+              style="flex:1;min-width:200px;max-width:280px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px" />
+            <select id="work-cat" onchange="renderWorkPosts()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px"><option value="">All categories</option></select>
+            <select id="work-budget" onchange="renderWorkPosts()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px">
+              <option value="">Any budget</option><option value="free">Free</option><option value="paid">Paid</option><option value="on_request">On request</option>
+            </select>
+          </div>
+          <div class="table-wrap" id="work-table"></div>
+        </div>
+      </div>
+
       <!-- CHATS -->
       <div class="page" id="page-chats">
         <div class="page-head"><div><div class="page-title">Chats</div><div class="page-sub">Platform conversations</div></div></div>
@@ -789,6 +817,7 @@ const auth = firebase.auth();
 
 // ── State ──
 let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[], userReviews=[];
+let workPostsData=[], workFilter='all';
 let userReviewFilter='all';
 let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
 let lrStatusFilter='pending', lrTypeFilter='all';
@@ -989,11 +1018,12 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'service-control') Promise.all([loadRestrictions(), loadEnabledRegions()]).then(renderRestrictions);
     if (page === 'location-requests') loadLocationRequests().then(renderLocationRequests);
     if (page === 'rbac') renderRBAC();
+    if (page === 'work') renderWorkPosts();
   });
 });
 
 // ── Filter bar handlers ──
-['user','helper','verification','alert','report','appeal','agreement'].forEach(name => {
+['user','helper','verification','alert','report','appeal','agreement','work'].forEach(name => {
   const el = document.getElementById(`${name}-filters`);
   if (!el) return;
   el.addEventListener('click', e => {
@@ -1006,6 +1036,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     else if (name === 'report') reportFilter = filter;
     else if (name === 'appeal') appealFilter = filter;
     else if (name === 'agreement') agreementFilter = filter;
+    else if (name === 'work') workFilter = filter;
     document.querySelectorAll(`#${name}-filters .filter-btn`).forEach(b => b.classList.remove('active'));
     e.target.classList.add('active');
     if (name === 'user') renderUsers();
@@ -1015,6 +1046,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     else if (name === 'report') renderReports();
     else if (name === 'appeal') renderAppeals();
     else if (name === 'agreement') renderAgreements();
+    else if (name === 'work') renderWorkPosts();
   });
 });
 
@@ -1229,6 +1261,14 @@ function loadAll() {
     setBadge('badge-agreements', agreements.filter(a => a.status === 'disputed').length);
     renderAgreements();
   }, err => console.log('agreements listener error:', err)));
+
+  // ── workPosts (Post a Work) ──
+  unsubscribers.push(db.collection('workPosts').onSnapshot(snap => {
+    workPostsData = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
+    setBadge('badge-work', workPostsData.filter(w => (w.status || '') === 'active').length);
+    renderWorkPosts();
+  }, err => console.log('workPosts listener error:', err)));
 
   // ── serviceRestrictions ──
   unsubscribers.push(db.collection('serviceRestrictions').onSnapshot(snap => {
@@ -2808,6 +2848,108 @@ function renderAgreements() {
         <td><button class="btn btn-primary btn-sm" onclick="viewAgreement('${a.id}')">View</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
+}
+
+// ── Work Posts (Post a Work) ──
+function renderWorkPosts() {
+  const target = document.getElementById('work-table'); if (!target) return;
+  const now = Date.now();
+  const isExp = w => (w.status === 'active') && w.expiresAt && msOf(w.expiresAt) > 0 && msOf(w.expiresAt) < now;
+  const statusOf = w => isExp(w) ? 'expired' : (w.status || 'active');
+
+  const catSel = document.getElementById('work-cat');
+  if (catSel && catSel.options.length <= 1) {
+    [...new Set(workPostsData.map(w => w.category).filter(Boolean))].sort().forEach(c => {
+      const o = document.createElement('option'); o.value = c; o.textContent = c; catSel.appendChild(o);
+    });
+  }
+  const q = (document.getElementById('work-search') ? document.getElementById('work-search').value : '').toLowerCase().trim();
+  const cat = document.getElementById('work-cat') ? document.getElementById('work-cat').value : '';
+  const bud = document.getElementById('work-budget') ? document.getElementById('work-budget').value : '';
+
+  const f = workPostsData.filter(w => {
+    if (workFilter !== 'all' && statusOf(w) !== workFilter) return false;
+    if (cat && w.category !== cat) return false;
+    if (bud && (w.budgetType || '') !== bud) return false;
+    if (q) {
+      const hay = `${w.title||''} ${w.userName||''} ${w.district||''} ${w.village||''} ${w.state||''} ${w.category||''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const statEl = document.getElementById('work-stats');
+  if (statEl) statEl.innerHTML = [
+    { label: 'Total Posts', val: workPostsData.length, icon: '💼', bg: 'info' },
+    { label: 'Active', val: workPostsData.filter(w => statusOf(w) === 'active').length, icon: '🟢', bg: 'success' },
+    { label: 'Completed', val: workPostsData.filter(w => (w.status||'') === 'completed').length, icon: '🎉', bg: 'purple' },
+    { label: 'Total Interest', val: workPostsData.reduce((s, w) => s + (w.interestedCount || 0), 0), icon: '🙋', bg: 'danger' },
+  ].map(s => `<div class="stat-card"><div class="stat-card-head"><div class="stat-label">${s.label}</div><div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div></div><div class="stat-value">${s.val}</div></div>`).join('');
+
+  const badges = {
+    active: '<span class="badge badge-approved">🟢 Active</span>',
+    completed: '<span class="badge badge-info">🎉 Completed</span>',
+    closed: '<span class="badge badge-gray">🚫 Closed</span>',
+    expired: '<span class="badge badge-warning">⌛ Expired</span>',
+    draft: '<span class="badge badge-pending">📝 Draft</span>',
+  };
+  const budgetLabel = w => w.budgetType === 'paid' ? `₹${(w.budgetAmount||0).toLocaleString('en-IN')} ${w.budgetUnit||''}` : w.budgetType === 'free' ? 'Free' : 'On request';
+  const urg = { emergency: '🔴', urgent: '🟠', normal: '' };
+
+  target.innerHTML = f.length === 0 ? empty('💼','No work posts','No posts match this filter') :
+    `<table class="table"><thead><tr><th>Title</th><th>Posted by</th><th>Location</th><th>Category</th><th>Budget</th><th>Interest</th><th>Status</th><th>Posted</th><th>Actions</th></tr></thead><tbody>` + f.map(w => `<tr>
+      <td><strong>${w.title||'—'}</strong> ${urg[w.urgency]||''}</td>
+      <td>${w.userName || '—'}<br><span class="user-meta"><code>${w.userId || ''}</code></span></td>
+      <td>${[w.village, w.district].filter(Boolean).join(', ') || '—'}<br><span class="user-meta">${w.state || ''}</span></td>
+      <td>${w.category || '—'}</td>
+      <td>${budgetLabel(w)}</td>
+      <td>👁 ${w.viewsCount||0} · 🙋 ${w.interestedCount||0}</td>
+      <td>${badges[statusOf(w)] || badges.active}</td>
+      <td>${fDate(w.createdAt)}</td>
+      <td><button class="btn btn-primary btn-sm" onclick="viewWorkPost('${w.id}')">View</button> <button class="btn btn-danger btn-sm" onclick="removeWorkPost('${w.id}')">🗑️</button></td>
+    </tr>`).join('') + `</tbody></table>`;
+}
+
+async function viewWorkPost(id) {
+  const w = workPostsData.find(x => x.id === id); if (!w) return;
+  showModal(
+    `<div class="modal-header"><div class="modal-title">💼 ${w.title || 'Work Post'}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="modal-section-header">📝 Details</div>
+      ${mf('Category', w.category || '—')}
+      ${mf('Description', w.description || '—')}
+      ${mf('Budget', w.budgetType === 'paid' ? `₹${(w.budgetAmount||0).toLocaleString('en-IN')} ${w.budgetUnit||''}` : (w.budgetType || '—'))}
+      ${mf('Urgency', w.urgency || 'normal')}
+      ${mf('Helpers needed', `${w.helpersNeeded || 1}${w.allowMultipleHelpers ? ' (multiple)' : ''}`)}
+      ${mf('Date required', w.dateTimeRequired ? new Date(w.dateTimeRequired).toLocaleString() : 'Flexible')}
+      ${mf('Verification required', w.verificationRequired ? 'Yes' : 'No')}
+      <div class="modal-section-header">👤 Poster</div>
+      ${mf('Name', `${w.userName || '—'}<br><code>${w.userId || ''}</code>`)}
+      <div class="modal-section-header">📍 Location</div>
+      ${mf('Area', [w.village, w.district, w.state].filter(Boolean).join(', ') || '—')}
+      ${mf('Visibility', (w.visibility && w.visibility.scope) || 'entire_area')}
+      ${(w.photos && w.photos.length) ? `<div class="modal-section-header">🖼 Photos</div><div style="display:flex;gap:8px;flex-wrap:wrap">${w.photos.map(p => `<img src="${p}" style="width:90px;height:90px;object-fit:cover;border-radius:8px" />`).join('')}</div>` : ''}
+      <div class="modal-section-header">🙋 Interested Helpers (${w.interestedCount || 0})</div>
+      <div id="work-interests">Loading…</div>
+      <div style="margin-top:16px"><button class="btn btn-danger" onclick="removeWorkPost('${w.id}')">🗑️ Remove Post</button></div>
+    </div>`
+  );
+  try {
+    const snap = await db.collection('workPosts').doc(id).collection('interests').get();
+    const el = document.getElementById('work-interests'); if (!el) return;
+    el.innerHTML = snap.empty ? '<span style="color:var(--text-mute)">No interested helpers yet.</span>' :
+      snap.docs.map(d => { const i = d.data(); return `<div style="background:var(--bg-alt);padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:12px"><strong>${i.helperName || 'Helper'}</strong> · ${i.status || 'interested'}${i.helperDistanceKm != null ? ' · ' + i.helperDistanceKm + ' km' : ''}${i.message ? `<br><span style="color:var(--text-mute)">"${i.message}"</span>` : ''}<br><code>${d.id}</code></div>`; }).join('');
+  } catch (e) { const el = document.getElementById('work-interests'); if (el) el.innerHTML = '<span style="color:var(--danger)">Could not load interests.</span>'; }
+}
+
+function removeWorkPost(id) {
+  const w = workPostsData.find(x => x.id === id); if (!w) return;
+  if (!confirm(`Remove work post "${w.title || id}"?\n\nThis permanently deletes it. Use for inappropriate or abusive posts.`)) return;
+  db.collection('workPosts').doc(id).delete().then(() => {
+    logAudit('Remove work post', `${w.title || id} (${w.userName || w.userId || ''})`);
+    showToast('🗑️ Work post removed', 'success');
+    closeModal();
+  }).catch(e => showToast('Failed: ' + e.message, 'error'));
 }
 
 function viewAgreement(id) {
