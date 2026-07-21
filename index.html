@@ -2906,7 +2906,7 @@ function renderWorkPosts() {
       <td>👁 ${w.viewsCount||0} · 🙋 ${w.interestedCount||0}</td>
       <td>${badges[statusOf(w)] || badges.active}</td>
       <td>${fDate(w.createdAt)}</td>
-      <td><button class="btn btn-primary btn-sm" onclick="viewWorkPost('${w.id}')">View</button> <button class="btn btn-danger btn-sm" onclick="removeWorkPost('${w.id}')">🗑️</button></td>
+      <td><button class="btn btn-primary btn-sm" onclick="viewWorkPost('${w.id}')">View</button> <button class="btn btn-ghost btn-sm" onclick="toggleWorkFeatured('${w.id}')" title="Feature">${w.featured ? '★' : '☆'}</button> <button class="btn btn-danger btn-sm" onclick="removeWorkPost('${w.id}')">🗑️</button></td>
     </tr>`).join('') + `</tbody></table>`;
 }
 
@@ -2940,6 +2940,14 @@ async function viewWorkPost(id) {
     el.innerHTML = snap.empty ? '<span style="color:var(--text-mute)">No interested helpers yet.</span>' :
       snap.docs.map(d => { const i = d.data(); return `<div style="background:var(--bg-alt);padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:12px"><strong>${i.helperName || 'Helper'}</strong> · ${i.status || 'interested'}${i.helperDistanceKm != null ? ' · ' + i.helperDistanceKm + ' km' : ''}${i.message ? `<br><span style="color:var(--text-mute)">"${i.message}"</span>` : ''}<br><code>${d.id}</code></div>`; }).join('');
   } catch (e) { const el = document.getElementById('work-interests'); if (el) el.innerHTML = '<span style="color:var(--danger)">Could not load interests.</span>'; }
+}
+
+function toggleWorkFeatured(id) {
+  const w = workPostsData.find(x => x.id === id); if (!w) return;
+  db.collection('workPosts').doc(id).update({ featured: !w.featured }).then(() => {
+    logAudit(w.featured ? 'Unfeature work post' : 'Feature work post', w.title || id);
+    showToast(w.featured ? 'Removed featured' : '★ Featured', 'success');
+  }).catch(e => showToast('Failed: ' + e.message, 'error'));
 }
 
 function removeWorkPost(id) {
