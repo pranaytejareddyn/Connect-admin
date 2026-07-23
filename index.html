@@ -432,6 +432,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-item" data-page="audit"><span class="nav-icon">📜</span>Audit Logs</div>
     <div class="nav-section" data-nav-module="user_role_management">Administration</div>
     <div class="nav-item" data-page="rbac" data-nav-module="user_role_management"><span class="nav-icon">🔐</span>User &amp; Roles</div>
+    <div class="nav-item" data-page="activity" data-nav-super="1"><span class="nav-icon">🕵️</span>Employee Activity</div>
     <div class="sidebar-footer">
       <div>Connect v1.0.0</div>
       <div style="margin-top:4px">🇮🇳 Pan-India Operations</div>
@@ -827,6 +828,63 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         </div>
         <div id="rbac-root"><div class="loading-state"><div class="spinner"></div>Loading…</div></div>
       </div>
+      <!-- EMPLOYEE ACTIVITY (Super Admin only) -->
+      <div class="page" id="page-activity">
+        <div class="page-head">
+          <div>
+            <div class="page-title">Employee Activity</div>
+            <div class="page-sub">Real-time monitoring &amp; immutable audit trail · Super Admin only</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" onclick="activitySetRange('day')" id="act-range-day">Today</button>
+            <button class="btn btn-ghost" onclick="activitySetRange('week')" id="act-range-week">This Week</button>
+            <button class="btn btn-ghost" onclick="activitySetRange('month')" id="act-range-month">This Month</button>
+            <button class="btn btn-primary" onclick="exportActivityCSV()">⬇️ Export CSV</button>
+          </div>
+        </div>
+
+        <div class="stats-grid" id="activity-stats"></div>
+
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-body">
+            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+              <div style="flex:1;min-width:180px">
+                <div class="login-label" style="margin-bottom:5px">Search</div>
+                <input id="act-search" class="login-input" placeholder="Employee, action, or details…" oninput="renderActivity()"/>
+              </div>
+              <div style="min-width:150px">
+                <div class="login-label" style="margin-bottom:5px">Employee</div>
+                <select id="act-employee" class="login-input" onchange="renderActivity()"><option value="all">All employees</option></select>
+              </div>
+              <div style="min-width:140px">
+                <div class="login-label" style="margin-bottom:5px">Role</div>
+                <select id="act-role" class="login-input" onchange="renderActivity()"><option value="all">All roles</option></select>
+              </div>
+              <div style="min-width:150px">
+                <div class="login-label" style="margin-bottom:5px">Module</div>
+                <select id="act-module" class="login-input" onchange="renderActivity()"><option value="all">All modules</option></select>
+              </div>
+              <div style="min-width:140px">
+                <div class="login-label" style="margin-bottom:5px">Action type</div>
+                <select id="act-type" class="login-input" onchange="renderActivity()"><option value="all">All actions</option></select>
+              </div>
+              <button class="btn btn-ghost" onclick="activityResetFilters()">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start" id="activity-cols">
+          <div class="card">
+            <div class="card-head"><div class="card-title">👥 Employees &amp; Productivity</div></div>
+            <div class="card-body" id="activity-employees"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div class="card-title">⚡ Live Activity Feed</div></div>
+            <div class="card-body" id="activity-feed" style="max-height:640px;overflow-y:auto"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="page" id="page-denied"></div>
     </main>
   </div>
@@ -870,6 +928,8 @@ const auth = firebase.auth();
 
 // ── State ──
 let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[], userReviews=[];
+let adminPresence = [];
+let activityRange = 'day';   // Employee Activity productivity window
 let workPostsData=[], workFilter='all';
 let userReviewFilter='all';
 let helperFilter='all', alertFilter='all', verificationFilter='all', reportFilter='all', userFilter='all', appealFilter='all', agreementFilter='all';
@@ -1051,12 +1111,22 @@ document.getElementById('login-btn').addEventListener('click', async () => {
       // Show a branded loader and keep the dashboard hidden until RBAC.init has
       // fully resolved + applied gating — prevents the all-modules flash.
       showRbacLoading();
-      RBAC.init(currentAdmin.email).then(() => loadAll());
+      RBAC.init(currentAdmin.email).then(() => {
+        logAudit('Signed in', 'Admin dashboard sign-in', 'user_role_management');
+        loadAll();
+      });
     })
     .catch(e => {
       setLoginLoading(false);
       errBox.textContent = friendlyAuthError(e);
       errBox.style.display = 'block';
+      // Failed attempts are recorded server-side (the client isn't authenticated
+      // here, so it cannot write to the locked auditLogs collection itself).
+      try {
+        firebase.app().functions('us-central1')
+          .httpsCallable('recordFailedAdminLogin')({ identifier: idInput, code: (e && e.code) || 'unknown' })
+          .catch(() => {});
+      } catch (_) {}
     });
 });
 
@@ -1102,7 +1172,12 @@ function hideRbacLoading() {
 }
 
 function showAdminMenu() {
-  if (confirm('Sign out of admin dashboard?')) auth.signOut().then(() => location.reload());
+  if (confirm('Sign out of admin dashboard?')) {
+    try { logAudit('Signed out', 'Admin dashboard sign-out', 'user_role_management'); } catch (_) {}
+    try { activityMarkOffline(); } catch (_) {}
+    // Small delay so the audit write + presence update leave the device.
+    setTimeout(() => auth.signOut().then(() => location.reload()), 350);
+  }
 }
 
 // ── Nav ──
@@ -1116,6 +1191,8 @@ document.querySelectorAll('.nav-item').forEach(item => {
     // of the page content when the employee lacks access.
     if (window.RBAC && RBAC.me && !RBAC.canViewPage(page)) { RBAC.showAccessDenied(page); return; }
     document.getElementById('page-' + page).classList.add('active');
+    if (typeof activityTrackPage === 'function') activityTrackPage(page);   // module-access tracking
+    if (page === 'activity') { activitySetRange(activityRange); }
     if (page === 'analytics') renderAnalytics();
     if (page === 'regions') renderRegions();
     if (page === 'moderation') renderModeration();
@@ -1399,10 +1476,25 @@ function loadAll() {
   }, err => console.log('locationRequests listener error:', err)));
 
   // ── auditLogs (server-side orderBy is safe — timestamp is uniform) ──
-  unsubscribers.push(db.collection('auditLogs').orderBy('timestamp', 'desc').limit(100).onSnapshot(snap => {
+  // Deeper window (500) so Employee Activity can compute day/week/month
+  // productivity without a second query. Still bounded — never unlimited.
+  unsubscribers.push(db.collection('auditLogs').orderBy('timestamp', 'desc').limit(500).onSnapshot(snap => {
     auditLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderAuditLogs();
+    if (typeof renderActivity === 'function') renderActivity();
   }, err => console.log('auditLogs listener error:', err)));
+
+  // Start presence heartbeat for THIS employee (all roles are tracked; only
+  // Super Admins can view the resulting data).
+  if (typeof startActivityTracking === 'function') startActivityTracking();
+
+  // ── Employee presence (Super Admin only surface) ──
+  if (window.RBAC && RBAC.isSuper && RBAC.isSuper()) {
+    unsubscribers.push(db.collection('adminPresence').onSnapshot(snap => {
+      adminPresence = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (typeof renderActivity === 'function') renderActivity();
+    }, err => console.log('adminPresence listener error:', err)));
+  }
 }
 
 // ── Legacy load* shims ───────────────────────────────────────────────
@@ -3867,6 +3959,245 @@ function renderAuditLogs() {
     auditLogs.map(log => `<div class="audit-row"><div class="audit-icon">⚙️</div><div class="audit-content"><span class="audit-actor">${log.adminName || log.adminEmail}</span> ${log.action}: <em>${log.details}</em><div class="audit-meta">${fDate(log.timestamp)}</div></div></div>`).join('');
 }
 
+// ════════════════════════════════════════════════════════════════════
+// EMPLOYEE ACTIVITY (Super Admin only)
+// Presence + productivity computed from the IMMUTABLE auditLogs collection
+// (create-only by rules) plus a lightweight adminPresence doc per employee.
+// Deleted employees keep their history: logs are keyed by email and are never
+// removed, so their timeline still renders after the account is gone.
+// ════════════════════════════════════════════════════════════════════
+
+function activityPresenceRef() {
+  const email = (currentAdmin.email || '').toLowerCase();
+  return email ? db.collection('adminPresence').doc(email) : null;
+}
+
+function activityMarkOnline(page) {
+  const ref = activityPresenceRef(); if (!ref) return;
+  const r = (window.RBAC && RBAC.me) || null;
+  const payload = {
+    email: currentAdmin.email,
+    name: (r && r.name) || currentAdmin.name,
+    role: (r && r.roleLabel) || 'Super Admin',
+    online: true,
+    lastActiveAt: firebase.firestore.FieldValue.serverTimestamp(),
+    device: (typeof navigator !== 'undefined' && navigator.userAgent) || null,
+    ip: (window.RBAC && RBAC.clientIp) || null,
+  };
+  if (page) payload.currentPage = page;
+  ref.set(payload, { merge: true }).catch(() => {});
+  if (page) {
+    const inc = {}; inc['pageHits.' + page] = firebase.firestore.FieldValue.increment(1);
+    ref.update(inc).catch(() => {});
+  }
+}
+
+function activityMarkOffline() {
+  const ref = activityPresenceRef(); if (!ref) return;
+  ref.set({ online: false, lastActiveAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
+}
+
+let _activityHeartbeat = null;
+function startActivityTracking() {
+  if (_activityHeartbeat) return;
+  activityMarkOnline('overview');
+  // Heartbeat keeps "online" fresh; presence is derived from recency so a
+  // closed laptop naturally goes offline without needing a clean logout.
+  _activityHeartbeat = setInterval(() => activityMarkOnline(), 45000);
+  window.addEventListener('beforeunload', activityMarkOffline);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') activityMarkOnline();
+  });
+}
+
+// Page/module access tracking — recorded on the presence doc (counters), not as
+// audit rows, so navigation never floods the immutable audit trail.
+function activityTrackPage(page) { if (page) activityMarkOnline(page); }
+
+function activityRangeStart() {
+  const d = new Date();
+  if (activityRange === 'day') { d.setHours(0, 0, 0, 0); return d.getTime(); }
+  const back = activityRange === 'week' ? 6 : 29;
+  d.setDate(d.getDate() - back); d.setHours(0, 0, 0, 0); return d.getTime();
+}
+function actTs(l) { return (l.timestamp && l.timestamp.toMillis) ? l.timestamp.toMillis() : 0; }
+
+function actionType(a) {
+  const s = (a || '').toLowerCase();
+  if (s.indexOf('failed') === 0 || s.includes('failed sign')) return 'Failed login';
+  if (s.includes('signed in') || s.includes('sign in')) return 'Login';
+  if (s.includes('signed out') || s.includes('sign out')) return 'Logout';
+  if (s.includes('approve')) return 'Approve';
+  if (s.includes('reject')) return 'Reject';
+  if (s.includes('suspend') || s.includes('block')) return 'Suspend/Block';
+  if (s.includes('delete') || s.includes('remove')) return 'Delete';
+  if (s.includes('broadcast')) return 'Broadcast';
+  if (s.includes('region')) return 'Region ops';
+  if (s.includes('create') || s.includes('add') || s.includes('enable')) return 'Create';
+  if (s.includes('update') || s.includes('edit') || s.includes('change') || s.includes('status')) return 'Update';
+  return 'Other';
+}
+
+function activitySetRange(r) {
+  activityRange = r;
+  ['day', 'week', 'month'].forEach(k => {
+    const b = document.getElementById('act-range-' + k);
+    if (b) b.className = 'btn ' + (k === r ? 'btn-primary' : 'btn-ghost');
+  });
+  renderActivity();
+}
+
+function activityResetFilters() {
+  ['act-search', 'act-employee', 'act-role', 'act-module', 'act-type'].forEach((id, i) => {
+    const el = document.getElementById(id); if (!el) return;
+    el.value = i === 0 ? '' : 'all';
+  });
+  renderActivity();
+}
+
+function _actFill(id, values, current) {
+  const el = document.getElementById(id); if (!el) return;
+  const keep = current || el.value || 'all';
+  const first = el.options.length ? el.options[0].outerHTML : '<option value="all">All</option>';
+  el.innerHTML = first + values.map(v => `<option value="${v}">${v}</option>`).join('');
+  el.value = values.indexOf(keep) >= 0 ? keep : 'all';
+}
+
+function renderActivity() {
+  if (!document.getElementById('activity-feed')) return;
+  if (!(window.RBAC && RBAC.isSuper && RBAC.isSuper())) return;   // hard gate
+
+  const from = activityRangeStart();
+  const inRange = auditLogs.filter(l => actTs(l) >= from);
+
+  // ── Populate filter dropdowns from real data ──
+  const emails = Array.from(new Set(auditLogs.map(l => l.adminEmail).filter(Boolean))).sort();
+  const roles = Array.from(new Set(auditLogs.map(l => l.role).filter(Boolean))).sort();
+  const modules = Array.from(new Set(auditLogs.map(l => l.module).filter(Boolean))).sort();
+  const types = Array.from(new Set(auditLogs.map(l => actionType(l.action)))).sort();
+  _actFill('act-employee', emails); _actFill('act-role', roles);
+  _actFill('act-module', modules); _actFill('act-type', types);
+
+  const q = (document.getElementById('act-search').value || '').toLowerCase().trim();
+  const fEmp = document.getElementById('act-employee').value;
+  const fRole = document.getElementById('act-role').value;
+  const fMod = document.getElementById('act-module').value;
+  const fType = document.getElementById('act-type').value;
+
+  const filtered = inRange.filter(l => {
+    if (fEmp !== 'all' && l.adminEmail !== fEmp) return false;
+    if (fRole !== 'all' && l.role !== fRole) return false;
+    if (fMod !== 'all' && l.module !== fMod) return false;
+    if (fType !== 'all' && actionType(l.action) !== fType) return false;
+    if (q) {
+      const hay = [l.employeeName, l.adminName, l.adminEmail, l.action, l.details, l.module].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  window._activityFiltered = filtered;   // used by the CSV export
+
+  // ── Presence: online = heartbeat within 2 minutes ──
+  const now = Date.now();
+  const presenceOf = {};
+  adminPresence.forEach(p => {
+    const last = (p.lastActiveAt && p.lastActiveAt.toMillis) ? p.lastActiveAt.toMillis() : 0;
+    presenceOf[(p.email || p.id || '').toLowerCase()] = {
+      online: !!p.online && (now - last) < 120000,
+      last, currentPage: p.currentPage || '—', device: p.device || '', ip: p.ip || '',
+    };
+  });
+  const onlineCount = Object.values(presenceOf).filter(p => p.online).length;
+  const failedCount = inRange.filter(l => actionType(l.action) === 'Failed login').length;
+  const activeEmployees = new Set(inRange.map(l => l.adminEmail).filter(Boolean)).size;
+
+  const label = activityRange === 'day' ? 'today' : activityRange === 'week' ? 'this week' : 'this month';
+  document.getElementById('activity-stats').innerHTML = [
+    { label: 'Employees Online', val: onlineCount, icon: '🟢', bg: 'success' },
+    { label: 'Actions ' + label, val: inRange.length, icon: '⚡', bg: 'info' },
+    { label: 'Active Employees', val: activeEmployees, icon: '👥', bg: 'purple' },
+    { label: 'Failed Logins', val: failedCount, icon: '🚫', bg: 'danger' },
+  ].map(s => `<div class="stat-card"><div class="stat-card-head"><div class="stat-label">${s.label}</div><div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div></div><div class="stat-value">${s.val}</div></div>`).join('');
+
+  // ── Employee-wise productivity (includes DELETED employees still in logs) ──
+  const known = (window.RBAC && RBAC.employees) ? RBAC.employees.slice() : [];
+  const byEmail = {};
+  known.forEach(e => { byEmail[(e.email || e.id || '').toLowerCase()] = { email: (e.email || e.id), name: e.name || e.email, role: e.roleLabel || e.role || '—', deleted: false }; });
+  emails.forEach(em => { const k = (em || '').toLowerCase(); if (!byEmail[k]) byEmail[k] = { email: em, name: em.split('@')[0], role: '—', deleted: true }; });
+
+  const bucket = k => inRange.filter(l => (l.adminEmail || '').toLowerCase() === k);
+  const countWhere = (rows, re) => rows.filter(l => re.test(((l.action || '') + ' ' + (l.module || '')).toLowerCase())).length;
+
+  const empRows = Object.keys(byEmail).map(k => {
+    const e = byEmail[k]; const rows = bucket(k); const p = presenceOf[k] || { online: false, last: 0, currentPage: '—' };
+    return { ...e, key: k, total: rows.length, p,
+      verif: countWhere(rows, /verif/), reviews: countWhere(rows, /review/),
+      alerts: countWhere(rows, /alert/), reports: countWhere(rows, /report/),
+      broadcasts: countWhere(rows, /broadcast/), regions: countWhere(rows, /region/),
+    };
+  }).sort((a, b) => (b.p.online - a.p.online) || (b.total - a.total));
+
+  document.getElementById('activity-employees').innerHTML = empRows.length === 0
+    ? '<div class="table-empty"><div class="table-empty-emoji">👥</div><div class="table-empty-title">No employee activity yet</div></div>'
+    : empRows.map(e => `
+      <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:9px;height:9px;border-radius:50%;background:${e.p.online ? 'var(--success)' : 'var(--text-mute)'};flex:none"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700">${e.name} ${e.deleted ? '<span class="badge badge-pending" style="font-size:10px">deleted</span>' : ''}</div>
+            <div style="font-size:12px;color:var(--text-sec)">${e.email} · ${e.role}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-weight:800;font-size:18px">${e.total}</div>
+            <div style="font-size:11px;color:var(--text-mute)">actions</div>
+          </div>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-sec);margin-top:6px">
+          ${e.p.online ? '🟢 Online · on <b>' + e.p.currentPage + '</b>' : '⚪ Offline · last active ' + (e.p.last ? fDate({ toMillis: () => e.p.last }) : '—')}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:11px">
+          ${[['Verifications', e.verif], ['Reviews', e.reviews], ['Alerts', e.alerts], ['Reports', e.reports], ['Broadcasts', e.broadcasts], ['Regions', e.regions]]
+            .filter(x => x[1] > 0)
+            .map(x => `<span class="badge badge-info">${x[0]}: ${x[1]}</span>`).join('') || '<span style="color:var(--text-mute)">No categorised actions in this period</span>'}
+        </div>
+      </div>`).join('');
+
+  // ── Live feed ──
+  document.getElementById('activity-feed').innerHTML = filtered.length === 0
+    ? '<div class="table-empty"><div class="table-empty-emoji">⚡</div><div class="table-empty-title">No activity matches these filters</div></div>'
+    : filtered.map(l => `
+      <div class="audit-row">
+        <div class="audit-icon">${actionType(l.action) === 'Failed login' ? '🚫' : actionType(l.action) === 'Login' ? '🔑' : '⚙️'}</div>
+        <div class="audit-content">
+          <span class="audit-actor">${l.employeeName || l.adminName || l.adminEmail}</span>
+          <span class="badge badge-info" style="font-size:10px;margin:0 4px">${actionType(l.action)}</span>
+          ${l.action}${l.details ? ': <em>' + l.details + '</em>' : ''}
+          <div class="audit-meta">${fDate(l.timestamp)} · ${l.role || '—'}${l.module ? ' · ' + l.module : ''}${l.ip ? ' · IP ' + l.ip : ''}</div>
+        </div>
+      </div>`).join('');
+}
+
+function exportActivityCSV() {
+  const rows = window._activityFiltered || [];
+  const headers = ['Timestamp', 'Employee', 'Email', 'Role', 'Action Type', 'Action', 'Module', 'Details', 'Previous', 'Updated', 'IP', 'Device'];
+  const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const body = rows.map(l => [
+    fDate(l.timestamp), l.employeeName || l.adminName || '', l.adminEmail || '', l.role || '',
+    actionType(l.action), l.action || '', l.module || '', l.details || '',
+    typeof l.previousValue === 'object' ? JSON.stringify(l.previousValue) : (l.previousValue || ''),
+    typeof l.updatedValue === 'object' ? JSON.stringify(l.updatedValue) : (l.updatedValue || ''),
+    l.ip || '', l.device || '',
+  ].map(esc).join(','));
+  const csv = headers.map(esc).join(',') + '\n' + body.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'employee-activity-' + activityRange + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  logAudit('Export employee activity', rows.length + ' rows (' + activityRange + ')', 'user_role_management');
+}
+
 // ── Export CSV (Pan-India) ──
 function exportCSV(type) {
   let data = [], headers = [];
@@ -4472,6 +4803,11 @@ function empty(emoji, title, sub) {
       document.querySelectorAll('[data-nav-module]').forEach(el => {
         const mod = el.getAttribute('data-nav-module');
         el.style.display = this.can(mod, 'view') ? '' : 'none';
+      });
+      // Super-Admin-only surfaces (Employee Activity). Hidden for every other
+      // role regardless of module permissions.
+      document.querySelectorAll('[data-nav-super]').forEach(el => {
+        el.style.display = this.isSuper() ? '' : 'none';
       });
     },
     setupIdleTimeout(minutes) {
