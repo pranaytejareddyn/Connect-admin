@@ -431,6 +431,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-item" data-page="service-control"><span class="nav-icon">🌍</span>Region Operations <span class="nav-badge" id="badge-service-control" style="display:none">0</span></div>
     <div class="nav-item" data-page="audit"><span class="nav-icon">📜</span>Audit Logs</div>
     <div class="nav-item" data-page="issues"><span class="nav-icon">🐞</span>Issue Tracker <span class="nav-badge" id="badge-issues" style="display:none">0</span></div>
+    <div class="nav-item" data-page="safety"><span class="nav-icon">🛡️</span>Safety Center <span class="nav-badge" id="badge-safety" style="display:none">0</span></div>
     <div class="nav-section" data-nav-module="user_role_management">Administration</div>
     <div class="nav-item" data-page="rbac" data-nav-module="user_role_management"><span class="nav-icon">🔐</span>User &amp; Roles</div>
     <div class="nav-item" data-page="activity" data-nav-super="1"><span class="nav-icon">🕵️</span>Employee Activity</div>
@@ -864,6 +865,41 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="table-wrap" id="issues-table"><div class="loading-state"><div class="spinner"></div>Loading issues...</div></div>
       </div>
 
+      <!-- SAFETY & MODERATION CENTER -->
+      <div class="page" id="page-safety">
+        <div class="page-head">
+          <div><div class="page-title">🛡️ Safety &amp; Moderation Center</div><div class="page-sub">Real-time AI moderation across chats, work posts, alerts, reviews, profiles &amp; agreements — flagged content, repeat offenders, and enforcement actions</div></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost btn-sm" onclick="safetyExportCSV()">📥 Export</button>
+          </div>
+        </div>
+
+        <div class="stats-grid" id="safety-stats" style="margin-bottom:14px"></div>
+
+        <div class="card" style="margin-bottom:14px"><div class="card-body">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="safety-search" class="form-input" style="max-width:240px" placeholder="🔎 Search content / account…" oninput="safetyFilters.q=this.value;renderSafety()"/>
+            <select class="form-input" style="max-width:140px" onchange="safetyFilters.severity=this.value;renderSafety()">
+              <option value="">Severity: All</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+            </select>
+            <select class="form-input" style="max-width:150px" onchange="safetyFilters.category=this.value;renderSafety()">
+              <option value="">Category: All</option><option value="violence">Violence</option><option value="sexual">Sexual</option><option value="illegal">Illegal</option><option value="harassment">Harassment</option><option value="fraud">Fraud</option>
+            </select>
+            <select class="form-input" style="max-width:150px" onchange="safetyFilters.source=this.value;renderSafety()">
+              <option value="">Source: All</option><option value="chat">Chats</option><option value="work_post">Work Posts</option><option value="alert">Alerts</option><option value="review">Reviews</option><option value="profile">Profiles</option><option value="agreement">Agreements</option>
+            </select>
+            <select class="form-input" style="max-width:170px" onchange="safetyFilters.status=this.value;renderSafety()">
+              <option value="">Status: Unresolved</option><option value="new">New</option><option value="reviewing">Reviewing</option><option value="actioned">Actioned</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option>
+            </select>
+            <select class="form-input" style="max-width:170px" onchange="safetyFilters.repeat=this.value;renderSafety()">
+              <option value="">Offenders: All</option><option value="repeat">Repeat (2+)</option><option value="serial">Serial (5+)</option>
+            </select>
+          </div>
+        </div></div>
+
+        <div class="table-wrap" id="safety-table"><div class="loading-state"><div class="spinner"></div>Loading incidents...</div></div>
+      </div>
+
       <!-- USER & ROLE MANAGEMENT (RBAC) -->
       <div class="page" id="page-rbac">
         <div class="page-head">
@@ -977,6 +1013,7 @@ const auth = firebase.auth();
 // ── State ──
 let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[], userReviews=[];
 let trackedIssues=[], adminInboxItems=[];
+let modIncidents=[];
 let adminPresence = [];
 let activityRange = 'day';   // Employee Activity productivity window
 let workPostsData=[], workFilter='all';
@@ -1250,6 +1287,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'location-requests') loadLocationRequests().then(renderLocationRequests);
     if (page === 'rbac') renderRBAC();
     if (page === 'issues') { renderIssues(); issuesMarkInboxSeen(); }
+    if (page === 'safety') renderSafety();
     if (page === 'work') renderWorkPosts();
   });
 });
@@ -1539,6 +1577,12 @@ function loadAll() {
     trackedIssues = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (typeof renderIssues === 'function') renderIssues();
   }, err => console.log('trackedIssues listener error:', err)));
+
+  // ── moderationIncidents (Safety & Moderation Center) ──
+  unsubscribers.push(db.collection('moderationIncidents').orderBy('createdAt', 'desc').limit(500).onSnapshot(snap => {
+    modIncidents = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (typeof renderSafety === 'function') renderSafety();
+  }, err => console.log('moderationIncidents listener error:', err)));
 
   // ── adminInbox (critical-issue + assignment pings for THIS employee) ──
   unsubscribers.push(db.collection('adminInbox').orderBy('createdAt', 'desc').limit(60).onSnapshot(snap => {
@@ -4630,7 +4674,7 @@ function empty(emoji, title, sub) {
     { key: 'user_role_management', label: 'User & Role Management', nav: 'rbac' },
     { key: 'system_configuration', label: 'System Configuration' },
     { key: 'activity_logs', label: 'Activity Logs' },
-    { key: 'ai_moderation', label: 'AI Moderation (future)' },
+    { key: 'ai_moderation', label: 'Safety & Moderation', nav: 'safety' },
     { key: 'backup_restore', label: 'Backup & Restore' },
     { key: 'api_management', label: 'API Management (future)' },
   ];
@@ -4677,6 +4721,13 @@ function empty(emoji, title, sub) {
     { id: 'user_manager', label: 'User Manager', color: 'primary', builtin: true, desc: 'Manage users and user verification.', permissions: mkPerm({ dashboard:['view'], users:['view','edit','suspend','block','manage','export'], user_verification:['view','approve','reject','manage'] }) },
     { id: 'verification_officer', label: 'Verification Officer', color: 'info', builtin: true, desc: 'Review and decide identity verifications.', permissions: mkPerm({ dashboard:['view'], helper_verification:['view','approve','reject'], user_verification:['view','approve','reject'] }) },
     { id: 'moderator', label: 'Moderator', color: 'warning', builtin: true, desc: 'Moderate reports, reviews and abuse.', permissions: mkPerm({ dashboard:['view'], moderation:['view','approve','reject','suspend','block','manage'], reports:['view','edit','manage'], reviews:['view','approve','reject','delete','manage'], user_reviews:['view','approve','reject','delete','manage'], appeals:['view','approve','reject'] }) },
+    { id: 'safety_moderator', label: 'Safety Moderator', color: 'danger', builtin: true, desc: 'Handle AI-flagged safety incidents (violence, threats, illegal content) in the Safety Center.', permissions: mkPerm({ dashboard:['view'], ai_moderation:['view','edit','approve','reject','suspend','block','assign','manage'], users:['view','suspend'], helpers:['view','suspend'], audit_logs:['view'] }) },
+    { id: 'content_moderator', label: 'Content Moderator', color: 'warning', builtin: true, desc: 'Review flagged posts, reviews, profiles and galleries.', permissions: mkPerm({ dashboard:['view'], ai_moderation:['view','edit','approve','reject','manage'], reviews:['view','approve','reject','delete'], user_reviews:['view','approve','reject','delete'], moderation:['view','approve','reject'] }) },
+    { id: 'chat_moderator', label: 'Chat Moderator', color: 'info', builtin: true, desc: 'Monitor flagged chat content and act on abusive conversations.', permissions: mkPerm({ dashboard:['view'], ai_moderation:['view','edit','approve','reject','manage'], chats:['view','manage'] }) },
+    { id: 'alert_moderator', label: 'Emergency Alert Moderator', color: 'danger', builtin: true, desc: 'Review emergency alerts and alert-related safety incidents.', permissions: mkPerm({ dashboard:['view'], ai_moderation:['view','edit','approve','reject'], alerts:['view','approve','reject','manage'] }) },
+    { id: 'fraud_officer', label: 'Fraud Monitoring Officer', color: 'purple', builtin: true, desc: 'Investigate fraud/scam incidents and suspicious financial activity.', permissions: mkPerm({ dashboard:['view'], ai_moderation:['view','edit','approve','reject','suspend','block','manage'], users:['view','suspend','block'], helpers:['view','suspend','block'], payments:['view'] }) },
+    { id: 'compliance_officer', label: 'Compliance Officer', color: 'success', builtin: true, desc: 'Oversee policy compliance, grievances and the moderation audit trail.', permissions: mkPerm({ dashboard:['view'], ai_moderation:['view','edit','manage'], audit_logs:['view'], reports:['view'], appeals:['view','approve','reject'] }) },
+    { id: 'senior_moderator', label: 'Senior Moderator', color: 'danger', builtin: true, desc: 'Full moderation authority: safety incidents, escalations, suspensions and bans.', permissions: mkPerm({ dashboard:['view'], ai_moderation:'*', moderation:'*', reports:'*', reviews:'*', user_reviews:'*', alerts:['view','approve','reject','manage'], chats:['view','manage'], users:['view','suspend','block','manage'], helpers:['view','suspend','block','manage'], appeals:'*', audit_logs:['view'] }) },
     { id: 'support_executive', label: 'Support Executive', color: 'info', builtin: true, desc: 'Handle support tickets and chats.', permissions: mkPerm({ dashboard:['view'], reports:['view','edit','manage'], issue_reports:['view','edit','manage'], chats:['view'], appeals:['view'] }) },
     { id: 'regional_manager', label: 'Regional Manager', color: 'success', builtin: true, desc: 'Region-scoped management of helpers, users, reports, verifications, alerts.', regionScoped: true, permissions: mkPerm({ dashboard:['view'], helpers:['view','edit','approve','reject','manage'], users:['view','edit','manage'], reports:['view','edit','manage'], helper_verification:['view','approve','reject'], user_verification:['view','approve','reject'], alerts:['view','approve','reject','manage'] }) },
     { id: 'review_manager', label: 'Review Manager', color: 'purple', builtin: true, desc: 'Manage reviews and user reviews.', permissions: mkPerm({ dashboard:['view'], reviews:['view','approve','reject','delete','manage'], user_reviews:['view','approve','reject','delete','manage'] }) },
@@ -5711,6 +5762,296 @@ function issuesExportCSV() {
   a.href = url; a.download = 'issues-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
   URL.revokeObjectURL(url);
   logAudit('Export issues CSV', rows.length + ' rows', 'Issue Tracker');
+}
+</script>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════
+// SAFETY & MODERATION CENTER — dashboard module. Incidents arrive in real
+// time from the moderation Cloud Functions via the central listener.
+// Every admin action is recorded on the incident (actionsTaken) AND in the
+// immutable auditLogs. Incidents are never deleted.
+// ════════════════════════════════════════════════════════════════════════
+var safetyFilters = { q: '', severity: '', category: '', source: '', status: '', repeat: '' };
+
+var SAFETY_SEV = {
+  critical: { label: 'Critical', color: 'danger' },
+  high:     { label: 'High',     color: 'danger' },
+  medium:   { label: 'Medium',   color: 'warning' },
+  low:      { label: 'Low',      color: 'info' },
+};
+var SAFETY_STATUS = {
+  new:       { label: 'New',       color: 'danger' },
+  reviewing: { label: 'Reviewing', color: 'warning' },
+  actioned:  { label: 'Actioned',  color: 'purple' },
+  resolved:  { label: 'Resolved',  color: 'success' },
+  dismissed: { label: 'Dismissed', color: 'gray' },
+};
+var SAFETY_SRC = { chat: '💬 Chat', work_post: '💼 Work Post', alert: '🚨 Alert', review: '⭐ Review', profile: '👤 Profile', agreement: '📋 Agreement' };
+
+function _ssev(p) { var c = SAFETY_SEV[p] || SAFETY_SEV.low; return '<span class="badge" style="background:var(--' + c.color + '-light);color:var(--' + c.color + ')">' + c.label + '</span>'; }
+function _sstatus(s) { var c = SAFETY_STATUS[s] || SAFETY_STATUS.new; return '<span class="badge" style="background:var(--' + (c.color === 'gray' ? 'border' : c.color + '-light') + ';color:var(--' + (c.color === 'gray' ? 'text-mute' : c.color) + ')">' + c.label + '</span>'; }
+function _sUnresolved(i) { return i.status !== 'resolved' && i.status !== 'dismissed'; }
+
+function _safetyMatches(i) {
+  var f = safetyFilters;
+  if (f.q) {
+    var hay = ((i.contentText || '') + ' ' + (i.accountName || '') + ' ' + (i.accountId || '')).toLowerCase();
+    if (hay.indexOf(f.q.toLowerCase()) === -1) return false;
+  }
+  if (f.severity && i.severity !== f.severity) return false;
+  if (f.category && i.category !== f.category) return false;
+  if (f.source && i.source !== f.source) return false;
+  if (f.status) { if ((i.status || 'new') !== f.status) return false; }
+  else if (!_sUnresolved(i)) return false;      // default: unresolved only
+  if (f.repeat === 'repeat' && (i.priorViolations || 0) < 1) return false;
+  if (f.repeat === 'serial' && (i.priorViolations || 0) < 4) return false;
+  return true;
+}
+
+function renderSafety() {
+  var statsEl = document.getElementById('safety-stats');
+  if (!statsEl) return;
+  var all = modIncidents;
+  var unresolved = all.filter(_sUnresolved);
+  var crit = unresolved.filter(function (i) { return i.severity === 'critical'; });
+  var high = unresolved.filter(function (i) { return i.severity === 'high'; });
+  var dayAgo = Date.now() - 86400000;
+  var newToday = all.filter(function (i) { var t = i.createdAt && i.createdAt.toMillis ? i.createdAt.toMillis() : 0; return t > dayAgo; });
+  var hidden = all.filter(function (i) { return i.autoHidden; });
+  var repeatSet = {};
+  all.forEach(function (i) { if ((i.priorViolations || 0) >= 1 && i.accountId) repeatSet[i.accountId] = 1; });
+
+  var cards = [
+    { label: 'Open Incidents', val: unresolved.length, icon: '🛡️', bg: 'danger' },
+    { label: 'Critical', val: crit.length, icon: '🚨', bg: 'danger' },
+    { label: 'High Risk', val: high.length, icon: '⚠️', bg: 'warning' },
+    { label: 'Detected (24h)', val: newToday.length, icon: '⏱️', bg: 'info' },
+    { label: 'Auto-Hidden', val: hidden.length, icon: '🙈', bg: 'purple' },
+    { label: 'Repeat Offenders', val: Object.keys(repeatSet).length, icon: '🔁', bg: 'warning' },
+  ];
+  statsEl.innerHTML = cards.map(function (s) {
+    return '<div class="stat-card"><div class="stat-card-head"><div class="stat-label">' + s.label +
+      '</div><div class="stat-icon" style="background:var(--' + s.bg + '-light);color:var(--' + s.bg + ')">' + s.icon +
+      '</div></div><div class="stat-value">' + s.val + '</div></div>';
+  }).join('');
+
+  var list = all.filter(_safetyMatches);
+  var tbl = document.getElementById('safety-table');
+  if (tbl) {
+    tbl.innerHTML = list.length === 0
+      ? '<div class="table-empty"><div class="table-empty-emoji">✅</div><div class="table-empty-title">No incidents match</div><div class="table-empty-sub">The platform is clean, or adjust the filters</div></div>'
+      : '<table class="table"><thead><tr><th>Severity</th><th>Category</th><th>Source</th><th>Content</th><th>Account</th><th>Prior</th><th>Detected</th><th>Status</th><th></th></tr></thead><tbody>' +
+        list.map(function (i) {
+          return '<tr>' +
+            '<td>' + _ssev(i.severity) + (i.autoHidden ? ' <span title="Content auto-hidden">🙈</span>' : '') + '</td>' +
+            '<td style="text-transform:capitalize">' + esc(i.category || '—') + '</td>' +
+            '<td>' + (SAFETY_SRC[i.source] || esc(i.source || '—')) + '</td>' +
+            '<td style="max-width:280px"><div style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(i.contentText || '') + '">' + esc((i.contentText || '').slice(0, 80)) + '</div></td>' +
+            '<td style="font-size:12px">' + esc(i.accountName || i.accountId || '—') + '<div style="font-size:10px;color:var(--text-mute)">' + esc(i.accountType || '') + ' · ' + esc(i.accountStatus || '') + '</div></td>' +
+            '<td>' + ((i.priorViolations || 0) >= 1 ? '<span class="badge" style="background:var(--warning-light);color:var(--warning)">' + i.priorViolations + '×</span>' : '0') + '</td>' +
+            '<td style="font-size:11.5px">' + fDate(i.createdAt) + '</td>' +
+            '<td>' + _sstatus(i.status || 'new') + '</td>' +
+            '<td><button class="btn btn-ghost btn-sm" onclick="openSafetyIncident(\'' + i.id + '\')">Review</button></td>' +
+          '</tr>';
+        }).join('') + '</tbody></table>';
+  }
+  setBadge('badge-safety', unresolved.filter(function (i) { return i.severity === 'critical' || i.severity === 'high'; }).length);
+}
+
+// ── Incident detail + actions ─────────────────────────────────────────────
+function openSafetyIncident(id) {
+  var i = modIncidents.find(function (x) { return x.id === id; });
+  if (!i) { showToast('Incident not found', 'error'); return; }
+  _issueEmployees().then(function (emps) {
+    var row = function (l, v) { return '<div style="display:flex;gap:8px;font-size:12.5px;padding:3px 0"><div style="width:130px;color:var(--text-mute);flex:none">' + l + '</div><div style="flex:1;word-break:break-word">' + v + '</div></div>'; };
+    var empOpts = '<option value="">— Unassigned —</option>' + emps.map(function (e) {
+      return '<option value="' + esc(e.email) + '"' + (i.assignedTo === e.email ? ' selected' : '') + '>' + esc(e.name) + '</option>';
+    }).join('');
+    var acts = (i.actionsTaken || []).map(function (a) {
+      return '<div style="font-size:11.5px;color:var(--text-sec);padding:2px 0">• <b>' + esc(a.action) + '</b> by ' + esc(a.by || '') + ' · ' + (a.at ? new Date(a.at).toLocaleString() : '') + '</div>';
+    }).join('') || '<div style="font-size:11.5px;color:var(--text-mute)">No actions yet.</div>';
+
+    showModal(
+      '<div class="modal-header"><div class="modal-title">' + _ssev(i.severity) + ' Safety Incident — <span style="text-transform:capitalize">' + esc(i.category || '') + '</span></div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+      '<div class="modal-body">' +
+        '<div style="background:var(--danger-light);border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-size:11px;font-weight:700;color:var(--danger);margin-bottom:4px">FLAGGED CONTENT' + (i.autoHidden ? ' (auto-hidden from users)' : '') + '</div><div style="font-size:13px;white-space:pre-wrap;word-break:break-word">' + esc(i.contentText || '') + '</div></div>' +
+        '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">' +
+          '<div style="flex:1;min-width:250px">' +
+            row('Status', _sstatus(i.status || 'new')) +
+            row('Account', esc(i.accountName || '—') + ' (' + esc(i.accountId || '—') + ')') +
+            row('Account type', esc(i.accountType || '—') + ' · ' + esc(i.accountStatus || '—')) +
+            row('Prior violations', String(i.priorViolations || 0)) +
+            row('Assigned to', esc(i.assignedToName || i.assignedTo || '—')) +
+          '</div>' +
+          '<div style="flex:1;min-width:250px">' +
+            row('Source', (SAFETY_SRC[i.source] || esc(i.source || '—')) + (i.screen ? ' · ' + esc(i.screen) : '')) +
+            row('Detected', fDate(i.createdAt)) +
+            row('Engine score', String(i.score || 0) + (i.llmVerdict ? ' · AI: ' + esc(i.llmVerdict.severity || '') + ' (' + esc(i.llmVerdict.reason || '') + ')' : '')) +
+            row('Content path', '<code style="font-size:10.5px">' + esc(i.contentPath || '—') + '</code>') +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-label" style="margin-bottom:6px">Enforcement actions</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
+          '<button class="btn btn-ghost btn-sm" onclick="safetyWarn(\'' + id + '\')">⚠️ Warn</button>' +
+          (!i.autoHidden && i.contentPath ? '<button class="btn btn-ghost btn-sm" onclick="safetyHide(\'' + id + '\')">🙈 Hide Content</button>' : '') +
+          '<button class="btn btn-ghost btn-sm" onclick="safetyRestrict(\'' + id + '\')">🔇 Restrict Messaging</button>' +
+          '<button class="btn btn-ghost btn-sm" style="color:var(--warning)" onclick="safetySuspend(\'' + id + '\')">⏸ Suspend Account</button>' +
+          '<button class="btn btn-danger btn-sm" onclick="safetyBan(\'' + id + '\')">⛔ Ban Account</button>' +
+          '<button class="btn btn-ghost btn-sm" onclick="safetyEscalate(\'' + id + '\')">📣 Escalate</button>' +
+        '</div>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">' +
+          '<div style="flex:1;min-width:200px"><div class="modal-label">Assign to</div><select id="safety-assign-sel" class="form-input">' + empOpts + '</select></div>' +
+          '<button class="btn btn-primary btn-sm" onclick="safetyAssign(\'' + id + '\')">Assign</button>' +
+        '</div>' +
+        '<div class="modal-label" style="margin-bottom:6px">Mark status</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
+          Object.keys(SAFETY_STATUS).map(function (s) {
+            return '<button class="btn btn-sm ' + ((i.status || 'new') === s ? 'btn-primary' : 'btn-ghost') + '" onclick="safetySetStatus(\'' + id + '\',\'' + s + '\')">' + SAFETY_STATUS[s].label + '</button>';
+          }).join(' ') +
+        '</div>' +
+        '<div class="modal-label">Action history</div><div style="max-height:110px;overflow:auto;margin:6px 0 10px">' + acts + '</div>' +
+        '<div class="modal-label">Internal notes</div>' +
+        '<div id="safety-notes" style="max-height:130px;overflow:auto;margin:6px 0"><div style="color:var(--text-mute);font-size:12px">Loading…</div></div>' +
+        '<div style="display:flex;gap:8px"><input id="safety-note-input" class="form-input" placeholder="Add an internal note…"/><button class="btn btn-primary" onclick="safetyAddNote(\'' + id + '\')">Post</button></div>' +
+      '</div>'
+    );
+    db.collection('moderationIncidents').doc(id).collection('notes').orderBy('at', 'desc').limit(50).get().then(function (snap) {
+      var el = document.getElementById('safety-notes');
+      if (!el) return;
+      el.innerHTML = snap.empty ? '<div style="color:var(--text-mute);font-size:12px">No notes yet.</div>' :
+        snap.docs.map(function (d) {
+          var c = d.data();
+          return '<div style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px"><div style="font-size:11px;color:var(--text-mute)"><b>' + esc(c.byName || c.by || '') + '</b> · ' + fDate(c.at) + '</div><div style="font-size:12.5px">' + esc(c.text || '') + '</div></div>';
+        }).join('');
+    }).catch(function () {});
+  });
+}
+
+function _safetyRecord(id, action, extraUpdates) {
+  var me = (currentAdmin.email || '').toLowerCase();
+  var updates = Object.assign({
+    actionsTaken: firebase.firestore.FieldValue.arrayUnion({ action: action, by: me, at: Date.now() }),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }, extraUpdates || {});
+  return db.collection('moderationIncidents').doc(id).set(updates, { merge: true }).then(function () {
+    logAudit('Safety: ' + action, 'incident ' + id, 'Safety Center');
+  });
+}
+function _incidentAccount(i) {
+  return { col: i.accountType === 'helper' ? 'helpers' : 'users', id: i.accountId };
+}
+
+function safetyWarn(id) {
+  var i = modIncidents.find(function (x) { return x.id === id; }); if (!i || !i.accountId) return;
+  db.collection('notifications').add({
+    userId: i.accountId, type: 'admin_notice',
+    title: '⚠️ Community guidelines warning',
+    body: 'Your recent content violated Find My Local community guidelines. Repeated violations can lead to suspension or a permanent ban. If you believe this is a mistake, contact support.',
+    data: { screen: 'HelpSupport' }, read: false, deleted: false,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }).then(function () { return _safetyRecord(id, 'Warned account', { status: 'actioned' }); })
+    .then(function () { showToast('⚠️ Warning sent', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetyHide(id) {
+  var i = modIncidents.find(function (x) { return x.id === id; }); if (!i || !i.contentPath) return;
+  db.doc(i.contentPath).set({ moderationHidden: true, moderationHiddenAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true })
+    .then(function () { return _safetyRecord(id, 'Hid content', { autoHidden: true, status: 'actioned' }); })
+    .then(function () { showToast('🙈 Content hidden', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetyRestrict(id) {
+  var i = modIncidents.find(function (x) { return x.id === id; }); if (!i || !i.accountId) return;
+  var a = _incidentAccount(i);
+  db.collection(a.col).doc(a.id).set({ chatRestricted: true, chatRestrictedAt: firebase.firestore.FieldValue.serverTimestamp(), chatRestrictedBy: currentAdmin.email || 'admin' }, { merge: true })
+    .then(function () { return _safetyRecord(id, 'Restricted messaging', { status: 'actioned' }); })
+    .then(function () { showToast('🔇 Messaging restricted', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetySuspend(id) {
+  var i = modIncidents.find(function (x) { return x.id === id; }); if (!i || !i.accountId) return;
+  if (!confirm('Temporarily suspend this account? They lose access until re-enabled.')) return;
+  var a = _incidentAccount(i);
+  db.collection(a.col).doc(a.id).set({ isSuspended: true, suspendedReason: 'Safety violation (' + (i.category || 'policy') + ')', suspendedAt: firebase.firestore.FieldValue.serverTimestamp(), suspendedBy: currentAdmin.email || 'admin' }, { merge: true })
+    .then(function () { return _safetyRecord(id, 'Suspended account', { status: 'actioned', accountStatus: 'suspended' }); })
+    .then(function () { showToast('⏸ Account suspended', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetyBan(id) {
+  var i = modIncidents.find(function (x) { return x.id === id; }); if (!i || !i.accountId) return;
+  if (!confirm('PERMANENTLY BAN this account? This blocks all access.')) return;
+  var a = _incidentAccount(i);
+  db.collection(a.col).doc(a.id).set({ isBlocked: true, blockReason: 'Safety violation (' + (i.category || 'policy') + ')', blockedAt: firebase.firestore.FieldValue.serverTimestamp(), blockedBy: currentAdmin.email || 'admin' }, { merge: true })
+    .then(function () { return _safetyRecord(id, 'Banned account', { status: 'actioned', accountStatus: 'blocked' }); })
+    .then(function () { showToast('⛔ Account banned', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetyEscalate(id) {
+  var i = modIncidents.find(function (x) { return x.id === id; }); if (!i) return;
+  db.collection('adminInbox').add({
+    to: 'all', kind: 'moderation_escalation',
+    title: '📣 Incident escalated to Super Admins',
+    body: '[' + (i.severity || '') + '/' + (i.category || '') + '] ' + (i.contentText || '').slice(0, 100),
+    incidentId: id, createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: [],
+  }).then(function () { return _safetyRecord(id, 'Escalated to Super Admins', { status: 'reviewing', escalated: true }); })
+    .then(function () { showToast('📣 Escalated', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetyAssign(id) {
+  var sel = document.getElementById('safety-assign-sel');
+  var email = sel ? sel.value : '';
+  _issueEmployees().then(function (emps) {
+    var emp = emps.find(function (e) { return e.email === email; });
+    return _safetyRecord(id, email ? 'Assigned to ' + email : 'Unassigned', {
+      assignedTo: email || null, assignedToName: emp ? emp.name : null,
+      status: email ? 'reviewing' : 'new',
+    }).then(function () {
+      if (email) {
+        db.collection('adminInbox').add({
+          to: email, kind: 'moderation_assigned',
+          title: '🛡️ Safety incident assigned to you',
+          body: 'Review the incident in the Safety Center.',
+          incidentId: id, createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: [],
+        }).catch(function () {});
+      }
+    });
+  }).then(function () { showToast('✅ Saved', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetySetStatus(id, status) {
+  var extra = { status: status };
+  if (status === 'resolved' || status === 'dismissed') {
+    extra.resolvedAt = firebase.firestore.FieldValue.serverTimestamp();
+    extra.resolvedBy = (currentAdmin.email || '').toLowerCase();
+  }
+  _safetyRecord(id, 'Status → ' + status, extra)
+    .then(function () { showToast('✅ Status updated', 'success'); closeModal(); })
+    .catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function safetyAddNote(id) {
+  var inp = document.getElementById('safety-note-input');
+  var text = (inp && inp.value || '').trim();
+  if (!text) return;
+  db.collection('moderationIncidents').doc(id).collection('notes').add({
+    by: (currentAdmin.email || '').toLowerCase(), byName: currentAdmin.name || currentAdmin.email,
+    text: text, at: firebase.firestore.FieldValue.serverTimestamp(),
+  }).then(function () { inp.value = ''; openSafetyIncident(id); })
+    .catch(function (e) { showToast('Could not post: ' + e.message, 'error'); });
+}
+function safetyExportCSV() {
+  var list = modIncidents.filter(_safetyMatches);
+  var headers = ['ID', 'Severity', 'Category', 'Source', 'Content', 'Account', 'Account Type', 'Prior Violations', 'Status', 'Assigned', 'Detected'];
+  var rows = list.map(function (i) {
+    return [i.id, i.severity, i.category, i.source, (i.contentText || '').slice(0, 200), i.accountName || i.accountId || '', i.accountType || '', i.priorViolations || 0, i.status || 'new', i.assignedTo || '', fDate(i.createdAt)];
+  });
+  var csv = [headers.join(',')].concat(rows.map(function (r) { return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','); })).join('\n');
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'safety-incidents-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
+  URL.revokeObjectURL(url);
+  logAudit('Export safety incidents CSV', rows.length + ' rows', 'Safety Center');
 }
 </script>
 
