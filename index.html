@@ -430,6 +430,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-item" data-page="notifications"><span class="nav-icon">🔔</span>Broadcasts</div>
     <div class="nav-item" data-page="service-control"><span class="nav-icon">🌍</span>Region Operations <span class="nav-badge" id="badge-service-control" style="display:none">0</span></div>
     <div class="nav-item" data-page="audit"><span class="nav-icon">📜</span>Audit Logs</div>
+    <div class="nav-item" data-page="issues"><span class="nav-icon">🐞</span>Issue Tracker <span class="nav-badge" id="badge-issues" style="display:none">0</span></div>
     <div class="nav-section" data-nav-module="user_role_management">Administration</div>
     <div class="nav-item" data-page="rbac" data-nav-module="user_role_management"><span class="nav-icon">🔐</span>User &amp; Roles</div>
     <div class="nav-item" data-page="activity" data-nav-super="1"><span class="nav-icon">🕵️</span>Employee Activity</div>
@@ -816,6 +817,53 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="card"><div class="card-body" id="audit-logs"><div class="loading-state"><div class="spinner"></div>Loading audit logs...</div></div></div>
       </div>
 
+      <!-- REAL-TIME ISSUE TRACKER -->
+      <div class="page" id="page-issues">
+        <div class="page-head">
+          <div><div class="page-title">🐞 Real-Time Issue Tracker</div><div class="page-sub">Live errors from the User &amp; Helper apps and backend — assign, track, and resolve without leaving the dashboard</div></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span id="issues-sync-meta" style="font-size:11px;color:var(--text-mute)"></span>
+            <button class="btn btn-ghost btn-sm" onclick="issuesExportCSV()">📥 Export</button>
+            <button class="btn btn-primary btn-sm" id="issues-sync-btn" onclick="syncSentryNow()">🔄 Sync from Sentry</button>
+          </div>
+        </div>
+
+        <div class="stats-grid" id="issues-stats" style="margin-bottom:14px"></div>
+
+        <div id="issues-inbox" style="margin-bottom:12px"></div>
+
+        <div class="card" style="margin-bottom:14px"><div class="card-body">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="issues-search" class="form-input" style="max-width:260px" placeholder="🔎 Search title / screen / module…" oninput="issueFilters.q=this.value;renderIssues()"/>
+            <select class="form-input" style="max-width:140px" onchange="issueFilters.severity=this.value;renderIssues()">
+              <option value="">Severity: All</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+            </select>
+            <select class="form-input" style="max-width:150px" onchange="issueFilters.platform=this.value;renderIssues()">
+              <option value="">Platform: All</option><option value="android">Android</option><option value="ios">iOS</option><option value="javascript">JS/Web</option><option value="backend">Backend</option>
+            </select>
+            <select class="form-input" style="max-width:170px" id="issues-module-filter" onchange="issueFilters.module=this.value;renderIssues()">
+              <option value="">Module: All</option>
+            </select>
+            <select class="form-input" style="max-width:170px" onchange="issueFilters.status=this.value;renderIssues()">
+              <option value="">Status: All open kinds</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="under_review">Under Review</option><option value="fixed">Fixed</option><option value="closed">Closed</option>
+            </select>
+            <select class="form-input" style="max-width:190px" id="issues-assignee-filter" onchange="issueFilters.assignee=this.value;renderIssues()">
+              <option value="">Assignee: Anyone</option><option value="__me__">Assigned to me</option><option value="__none__">Unassigned</option>
+            </select>
+            <select class="form-input" style="max-width:150px" onchange="issueFilters.days=this.value;renderIssues()">
+              <option value="">Time: All</option><option value="1">Last 24h</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option>
+            </select>
+          </div>
+        </div></div>
+
+        <div class="card" style="margin-bottom:14px"><div class="card-body">
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">📈 New issues — last 14 days</div>
+          <div id="issues-trend" style="display:flex;align-items:flex-end;gap:4px;height:64px"></div>
+        </div></div>
+
+        <div class="table-wrap" id="issues-table"><div class="loading-state"><div class="spinner"></div>Loading issues...</div></div>
+      </div>
+
       <!-- USER & ROLE MANAGEMENT (RBAC) -->
       <div class="page" id="page-rbac">
         <div class="page-head">
@@ -928,6 +976,7 @@ const auth = firebase.auth();
 
 // ── State ──
 let helpers=[], users=[], alerts=[], chats=[], reviews=[], reports=[], auditLogs=[], appeals=[], agreements=[], restrictions=[], enabledRegions=[], locationRequests=[], userReviews=[];
+let trackedIssues=[], adminInboxItems=[];
 let adminPresence = [];
 let activityRange = 'day';   // Employee Activity productivity window
 let workPostsData=[], workFilter='all';
@@ -1200,6 +1249,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'service-control') Promise.all([loadRestrictions(), loadEnabledRegions()]).then(renderRestrictions);
     if (page === 'location-requests') loadLocationRequests().then(renderLocationRequests);
     if (page === 'rbac') renderRBAC();
+    if (page === 'issues') { renderIssues(); issuesMarkInboxSeen(); }
     if (page === 'work') renderWorkPosts();
   });
 });
@@ -1483,6 +1533,18 @@ function loadAll() {
     renderAuditLogs();
     if (typeof renderActivity === 'function') renderActivity();
   }, err => console.log('auditLogs listener error:', err)));
+
+  // ── trackedIssues (Real-Time Issue Tracker — mirrors of Sentry issues) ──
+  unsubscribers.push(db.collection('trackedIssues').orderBy('lastSeen', 'desc').limit(500).onSnapshot(snap => {
+    trackedIssues = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (typeof renderIssues === 'function') renderIssues();
+  }, err => console.log('trackedIssues listener error:', err)));
+
+  // ── adminInbox (critical-issue + assignment pings for THIS employee) ──
+  unsubscribers.push(db.collection('adminInbox').orderBy('createdAt', 'desc').limit(60).onSnapshot(snap => {
+    adminInboxItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (typeof renderIssuesInbox === 'function') renderIssuesInbox();
+  }, err => console.log('adminInbox listener error:', err)));
 
   // Start presence heartbeat for THIS employee (all roles are tracked; only
   // Super Admins can view the resulting data).
@@ -4562,7 +4624,7 @@ function empty(emoji, title, sub) {
     { key: 'region_operations', label: 'Region Operations', nav: 'service-control' },
     { key: 'analytics', label: 'Analytics', nav: 'analytics' },
     { key: 'audit_logs', label: 'Audit Logs', nav: 'audit' },
-    { key: 'issue_reports', label: 'Issue Reports' },
+    { key: 'issue_reports', label: 'Issue Tracker', nav: 'issues' },
     { key: 'payments', label: 'Payments' },
     { key: 'settings', label: 'Settings' },
     { key: 'user_role_management', label: 'User & Role Management', nav: 'rbac' },
@@ -5220,6 +5282,394 @@ function empty(emoji, title, sub) {
     return '<div class="modal-field"><div class="modal-label">' + label + '</div><input type="' + (type || 'text') + '" id="' + id + '" class="form-input" value="' + esc(val || '') + '"/></div>';
   }
 })();
+</script>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════
+// REAL-TIME ISSUE TRACKER — dashboard module.
+// Data arrives via the central trackedIssues/adminInbox listeners (auth-
+// gated, real-time). Sentry stays the source of truth; this module is the
+// management layer: assign, prioritise, status workflow, comments, audit.
+// ════════════════════════════════════════════════════════════════════════
+var issueFilters = { q: '', severity: '', platform: '', module: '', status: '', assignee: '', days: '' };
+var _issueEmployeesCache = null;
+var _issueMetaCache = null;
+
+var ISSUE_STATUS = {
+  open:         { label: 'Open',         color: 'danger'  },
+  in_progress:  { label: 'In Progress',  color: 'info'    },
+  under_review: { label: 'Under Review', color: 'warning' },
+  fixed:        { label: 'Fixed',        color: 'success' },
+  closed:       { label: 'Closed',       color: 'purple'  },
+};
+var ISSUE_SEV = {
+  critical: { label: 'Critical', color: 'danger'  },
+  high:     { label: 'High',     color: 'warning' },
+  medium:   { label: 'Medium',   color: 'info'    },
+  low:      { label: 'Low',      color: 'purple'  },
+};
+
+function _sevPill(p) {
+  var c = ISSUE_SEV[p] || ISSUE_SEV.low;
+  return '<span class="badge" style="background:var(--' + c.color + '-light);color:var(--' + c.color + ')">' + c.label + '</span>';
+}
+function _statusPill(s) {
+  var c = ISSUE_STATUS[s] || ISSUE_STATUS.open;
+  return '<span class="badge" style="background:var(--' + c.color + '-light);color:var(--' + c.color + ')">' + c.label + '</span>';
+}
+function _tsMs(ts) { return (ts && ts.toMillis) ? ts.toMillis() : (ts ? new Date(ts).getTime() : 0); }
+function _isDone(i) { return i.status === 'fixed' || i.status === 'closed'; }
+
+function _issueMatchesFilters(i) {
+  var f = issueFilters;
+  if (f.q) {
+    var q = f.q.toLowerCase();
+    var hay = ((i.title || '') + ' ' + (i.screen || '') + ' ' + (i.module || '') + ' ' + (i.shortId || '')).toLowerCase();
+    if (hay.indexOf(q) === -1) return false;
+  }
+  if (f.severity && (i.priority || 'low') !== f.severity) return false;
+  if (f.platform && String(i.platform || '').toLowerCase().indexOf(f.platform) === -1) return false;
+  if (f.module && (i.module || 'Other') !== f.module) return false;
+  if (f.status) { if ((i.status || 'open') !== f.status) return false; }
+  else if (_isDone(i)) return false;   // default view: everything not done
+  if (f.assignee === '__me__' && (i.assignedTo || '') !== (currentAdmin.email || '').toLowerCase()) return false;
+  if (f.assignee === '__none__' && i.assignedTo) return false;
+  if (f.assignee && f.assignee !== '__me__' && f.assignee !== '__none__' && (i.assignedTo || '') !== f.assignee) return false;
+  if (f.days) {
+    var cutoff = Date.now() - Number(f.days) * 86400000;
+    if (_tsMs(i.lastSeen) < cutoff) return false;
+  }
+  return true;
+}
+
+function renderIssues() {
+  var statsEl = document.getElementById('issues-stats');
+  if (!statsEl) return;
+
+  var all = trackedIssues;
+  var dayMs = 86400000;
+  var active = all.filter(function (i) { return !_isDone(i); });
+  var critical = active.filter(function (i) { return (i.priority || '') === 'critical'; });
+  var newToday = all.filter(function (i) { return _tsMs(i.firstSeen) > Date.now() - dayMs; });
+  var resolved = all.filter(_isDone);
+  var crashes = all.filter(function (i) { return i.level === 'fatal'; });
+  var backend = active.filter(function (i) { return (i.platform || '') === 'backend'; });
+
+  var cf = (_issueMetaCache && _issueMetaCache.crashFreeRate24h != null) ? _issueMetaCache.crashFreeRate24h + '%' : '—';
+  var cards = [
+    { label: 'Active Issues', val: active.length, icon: '🐞', bg: 'danger' },
+    { label: 'Critical', val: critical.length, icon: '🔴', bg: 'danger' },
+    { label: 'New (24h)', val: newToday.length, icon: '✨', bg: 'info' },
+    { label: 'Resolved', val: resolved.length, icon: '✅', bg: 'success' },
+    { label: 'App Crashes', val: crashes.length, icon: '💥', bg: 'warning' },
+    { label: 'Backend Failures', val: backend.length, icon: '🖥️', bg: 'purple' },
+    { label: 'Crash-Free (24h)', val: cf, icon: '🛡️', bg: 'success' },
+  ];
+  statsEl.innerHTML = cards.map(function (s) {
+    return '<div class="stat-card"><div class="stat-card-head"><div class="stat-label">' + s.label +
+      '</div><div class="stat-icon" style="background:var(--' + s.bg + '-light);color:var(--' + s.bg + ')">' + s.icon +
+      '</div></div><div class="stat-value">' + s.val + '</div></div>';
+  }).join('');
+
+  // Module filter options (built from live data, keeps current selection).
+  var modSel = document.getElementById('issues-module-filter');
+  if (modSel) {
+    var mods = {}; all.forEach(function (i) { mods[i.module || 'Other'] = 1; });
+    var cur = issueFilters.module;
+    modSel.innerHTML = '<option value="">Module: All</option>' + Object.keys(mods).sort().map(function (m) {
+      return '<option value="' + esc(m) + '"' + (m === cur ? ' selected' : '') + '>' + esc(m) + '</option>';
+    }).join('');
+  }
+  // Assignee filter options.
+  var asSel = document.getElementById('issues-assignee-filter');
+  if (asSel) {
+    var ass = {}; all.forEach(function (i) { if (i.assignedTo) ass[i.assignedTo] = i.assignedToName || i.assignedTo; });
+    var curA = issueFilters.assignee;
+    asSel.innerHTML = '<option value="">Assignee: Anyone</option><option value="__me__"' + (curA === '__me__' ? ' selected' : '') + '>Assigned to me</option><option value="__none__"' + (curA === '__none__' ? ' selected' : '') + '>Unassigned</option>' +
+      Object.keys(ass).map(function (e) { return '<option value="' + esc(e) + '"' + (e === curA ? ' selected' : '') + '>' + esc(ass[e]) + '</option>'; }).join('');
+  }
+
+  // 14-day new-issue trend (CSS bars).
+  var trendEl = document.getElementById('issues-trend');
+  if (trendEl) {
+    var days = [];
+    for (var d = 13; d >= 0; d--) {
+      var start = new Date(); start.setHours(0, 0, 0, 0); start = start.getTime() - d * dayMs;
+      var n = all.filter(function (i) { var t = _tsMs(i.firstSeen); return t >= start && t < start + dayMs; }).length;
+      days.push({ n: n, label: new Date(start).getDate() });
+    }
+    var max = Math.max.apply(null, days.map(function (x) { return x.n; }).concat([1]));
+    trendEl.innerHTML = days.map(function (x) {
+      var h = Math.max(3, Math.round((x.n / max) * 52));
+      return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="' + x.n + ' new">' +
+        '<div style="width:100%;max-width:26px;height:' + h + 'px;border-radius:4px 4px 0 0;background:' + (x.n ? 'var(--danger)' : 'var(--border)') + ';opacity:' + (x.n ? '0.85' : '0.6') + '"></div>' +
+        '<div style="font-size:9px;color:var(--text-mute)">' + x.label + '</div></div>';
+    }).join('');
+  }
+
+  // Table.
+  var list = all.filter(_issueMatchesFilters);
+  var tbl = document.getElementById('issues-table');
+  if (tbl) {
+    tbl.innerHTML = list.length === 0
+      ? '<div class="table-empty"><div class="table-empty-emoji">🎉</div><div class="table-empty-title">No issues match</div><div class="table-empty-sub">Adjust filters, or press "Sync from Sentry" to backfill</div></div>'
+      : '<table class="table"><thead><tr><th>Severity</th><th>Issue</th><th>Platform</th><th>Module</th><th>Events</th><th>Users</th><th>Last Seen</th><th>Assignee</th><th>Status</th><th></th></tr></thead><tbody>' +
+        list.map(function (i) {
+          return '<tr>' +
+            '<td>' + _sevPill(i.priority || 'low') + '</td>' +
+            '<td style="max-width:340px"><div style="font-weight:600;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(i.title || '') + '">' + esc((i.title || '').slice(0, 90)) + '</div>' +
+              '<div style="font-size:11px;color:var(--text-mute)">' + esc(i.shortId || i.id) + (i.screen ? ' · ' + esc(i.screen) : '') + '</div></td>' +
+            '<td>' + esc(i.platform || '—') + '</td>' +
+            '<td>' + esc(i.module || 'Other') + '</td>' +
+            '<td>' + (i.count || 0) + '</td>' +
+            '<td>' + (i.userCount != null ? i.userCount : '—') + '</td>' +
+            '<td style="font-size:11.5px">' + fDate(i.lastSeen) + '</td>' +
+            '<td style="font-size:11.5px">' + esc(i.assignedToName || i.assignedTo || '—') + '</td>' +
+            '<td>' + _statusPill(i.status || 'open') + '</td>' +
+            '<td><button class="btn btn-ghost btn-sm" onclick="openIssueDetail(\'' + i.id + '\')">Open</button></td>' +
+          '</tr>';
+        }).join('') + '</tbody></table>';
+  }
+
+  // Badge: critical open + my unread inbox pings.
+  var unread = _myUnreadInbox().length;
+  setBadge('badge-issues', critical.length + unread);
+
+  var meta = document.getElementById('issues-sync-meta');
+  if (meta && _issueMetaCache && _issueMetaCache.lastSyncAt) {
+    meta.textContent = 'Last sync: ' + fDate(_issueMetaCache.lastSyncAt);
+  }
+}
+
+// ── Inbox strip (critical alerts + assignment pings for me) ──────────────
+function _myUnreadInbox() {
+  var me = (currentAdmin.email || '').toLowerCase();
+  return adminInboxItems.filter(function (n) {
+    var mine = n.to === 'all' || n.to === me;
+    var read = Array.isArray(n.readBy) && n.readBy.indexOf(me) !== -1;
+    return mine && !read;
+  });
+}
+function renderIssuesInbox() {
+  var el = document.getElementById('issues-inbox');
+  if (!el) { renderIssues(); return; }
+  var unread = _myUnreadInbox().slice(0, 5);
+  el.innerHTML = unread.length === 0 ? '' :
+    unread.map(function (n) {
+      return '<div class="card" style="margin-bottom:6px;border-left:3px solid var(--danger)"><div class="card-body" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px">' +
+        '<div><b style="font-size:12.5px">' + esc(n.title || '') + '</b><div style="font-size:11.5px;color:var(--text-sec)">' + esc(n.body || '') + '</div></div>' +
+        (n.issueDocId ? '<button class="btn btn-ghost btn-sm" onclick="openIssueDetail(\'' + esc(n.issueDocId) + '\')">View</button>' : '') +
+        '</div></div>';
+    }).join('');
+  renderIssues();
+}
+function issuesMarkInboxSeen() {
+  var me = (currentAdmin.email || '').toLowerCase();
+  _myUnreadInbox().forEach(function (n) {
+    db.collection('adminInbox').doc(n.id).update({ readBy: firebase.firestore.FieldValue.arrayUnion(me) }).catch(function () {});
+  });
+}
+
+// ── Employees for assignment (adminUsers, cached) ─────────────────────────
+function _issueEmployees() {
+  if (_issueEmployeesCache) return Promise.resolve(_issueEmployeesCache);
+  return db.collection('adminUsers').get().then(function (snap) {
+    _issueEmployeesCache = snap.docs
+      .map(function (d) { return { email: d.id, name: (d.data().name || d.id), status: d.data().status || 'active' }; })
+      .filter(function (e) { return e.status === 'active'; });
+    return _issueEmployeesCache;
+  }).catch(function () { return []; });
+}
+
+// ── Detail modal ──────────────────────────────────────────────────────────
+function openIssueDetail(id) {
+  var i = trackedIssues.find(function (x) { return x.id === id; });
+  if (!i) { showToast('Issue not found (it may have been removed)', 'error'); return; }
+  _issueEmployees().then(function (emps) {
+    var infoRow = function (l, v) {
+      return '<div style="display:flex;gap:8px;font-size:12.5px;padding:3px 0"><div style="width:130px;color:var(--text-mute);flex:none">' + l + '</div><div style="flex:1;word-break:break-word">' + v + '</div></div>';
+    };
+    var stat = i.status || 'open';
+    var statusBtns = Object.keys(ISSUE_STATUS).map(function (s) {
+      var on = s === stat;
+      return '<button class="btn btn-sm ' + (on ? 'btn-primary' : 'btn-ghost') + '" onclick="issueSetStatus(\'' + id + '\',\'' + s + '\')">' + ISSUE_STATUS[s].label + '</button>';
+    }).join(' ');
+    var sevOpts = Object.keys(ISSUE_SEV).map(function (p) {
+      return '<option value="' + p + '"' + ((i.priority || 'low') === p ? ' selected' : '') + '>' + ISSUE_SEV[p].label + '</option>';
+    }).join('');
+    var empOpts = '<option value="">— Unassigned —</option>' + emps.map(function (e) {
+      return '<option value="' + esc(e.email) + '"' + (i.assignedTo === e.email ? ' selected' : '') + '>' + esc(e.name) + ' (' + esc(e.email) + ')</option>';
+    }).join('');
+
+    showModal(
+      '<div class="modal-header"><div class="modal-title" style="max-width:560px">' + _sevPill(i.priority || 'low') + ' ' + esc((i.title || '').slice(0, 120)) + '</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+      '<div class="modal-body">' +
+        '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">' +
+          '<div style="flex:1;min-width:260px">' +
+            infoRow('Status', _statusPill(stat)) +
+            infoRow('Issue ID', esc(i.shortId || i.id)) +
+            infoRow('Platform', esc(i.platform || '—') + (i.release ? ' · v' + esc(i.release) : '')) +
+            infoRow('Module', esc(i.module || 'Other')) +
+            infoRow('Screen', esc(i.screen || '—')) +
+            infoRow('Culprit', esc(i.culprit || '—')) +
+            infoRow('Occurrences', (i.count || 0) + ' events · ' + (i.userCount != null ? i.userCount + ' users' : 'users —')) +
+          '</div>' +
+          '<div style="flex:1;min-width:260px">' +
+            infoRow('First seen', fDate(i.firstSeen)) +
+            infoRow('Last seen', fDate(i.lastSeen)) +
+            infoRow('Device', esc(i.device || '—')) +
+            infoRow('OS', esc(i.os || '—')) +
+            infoRow('Sentry User', esc(i.sentryUserId || '—')) +
+            infoRow('Source', esc(i.source || '—')) +
+            infoRow('Sentry', i.permalink ? '<a href="' + esc(i.permalink) + '" target="_blank" rel="noopener">Open in Sentry ↗</a>' : '—') +
+          '</div>' +
+        '</div>' +
+        (i.stack ? '<div style="font-weight:600;font-size:12px;margin:8px 0 4px">Stack trace</div><pre style="background:#0F172A;color:#E2E8F0;font-size:11px;padding:10px;border-radius:8px;max-height:180px;overflow:auto;white-space:pre-wrap">' + esc(i.stack) + '</pre>' : '') +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;align-items:flex-end">' +
+          '<div style="flex:1;min-width:220px"><div class="modal-label">Assign to employee</div><select id="issue-assign-sel" class="form-input">' + empOpts + '</select></div>' +
+          '<div style="min-width:140px"><div class="modal-label">Priority</div><select id="issue-priority-sel" class="form-input">' + sevOpts + '</select></div>' +
+          '<button class="btn btn-primary" onclick="issueApplyAssignment(\'' + id + '\')">Save</button>' +
+        '</div>' +
+        '<div class="modal-label" style="margin-bottom:6px">Status</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">' + statusBtns + '</div>' +
+        '<div class="modal-label">Internal comments</div>' +
+        '<div id="issue-comments" style="max-height:160px;overflow:auto;margin:6px 0"><div style="color:var(--text-mute);font-size:12px">Loading…</div></div>' +
+        '<div style="display:flex;gap:8px"><input id="issue-comment-input" class="form-input" placeholder="Add a note for the team…"/><button class="btn btn-primary" onclick="issueAddComment(\'' + id + '\')">Post</button></div>' +
+      '</div>'
+    );
+    _issueLoadComments(id);
+  });
+}
+
+function _issueLoadComments(id) {
+  db.collection('trackedIssues').doc(id).collection('comments').orderBy('at', 'desc').limit(50).get().then(function (snap) {
+    var el = document.getElementById('issue-comments');
+    if (!el) return;
+    el.innerHTML = snap.empty ? '<div style="color:var(--text-mute);font-size:12px">No comments yet.</div>' :
+      snap.docs.map(function (d) {
+        var c = d.data();
+        return '<div style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">' +
+          '<div style="font-size:11px;color:var(--text-mute)"><b>' + esc(c.byName || c.by || '') + '</b> · ' + fDate(c.at) + '</div>' +
+          '<div style="font-size:12.5px;margin-top:2px">' + esc(c.text || '') + '</div></div>';
+      }).join('');
+  }).catch(function () {});
+}
+
+function issueAddComment(id) {
+  var inp = document.getElementById('issue-comment-input');
+  var text = (inp && inp.value || '').trim();
+  if (!text) return;
+  db.collection('trackedIssues').doc(id).collection('comments').add({
+    by: (currentAdmin.email || '').toLowerCase(),
+    byName: currentAdmin.name || currentAdmin.email,
+    text: text,
+    at: firebase.firestore.FieldValue.serverTimestamp(),
+  }).then(function () {
+    inp.value = '';
+    _issueLoadComments(id);
+    logAudit('Comment on issue', text.slice(0, 120), 'Issue Tracker');
+  }).catch(function (e) { showToast('Could not post: ' + e.message, 'error'); });
+}
+
+function issueApplyAssignment(id) {
+  var i = trackedIssues.find(function (x) { return x.id === id; }) || {};
+  var sel = document.getElementById('issue-assign-sel');
+  var pri = document.getElementById('issue-priority-sel');
+  var email = sel ? sel.value : '';
+  var priority = pri ? pri.value : (i.priority || 'low');
+  _issueEmployees().then(function (emps) {
+    var emp = emps.find(function (e) { return e.email === email; });
+    var updates = {
+      priority: priority,
+      assignedTo: email || null,
+      assignedToName: emp ? emp.name : null,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    };
+    if (email && email !== i.assignedTo) {
+      updates.assignedAt = firebase.firestore.FieldValue.serverTimestamp();
+      updates.assignedBy = (currentAdmin.email || '').toLowerCase();
+    }
+    db.collection('trackedIssues').doc(id).set(updates, { merge: true }).then(function () {
+      if (email && email !== i.assignedTo) {
+        db.collection('adminInbox').add({
+          to: email, kind: 'issue_assigned',
+          title: '📌 Issue assigned to you',
+          body: (i.title || '').slice(0, 160),
+          issueDocId: id,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: [],
+        }).catch(function () {});
+      }
+      logAudit('Issue assignment/priority', (i.shortId || id) + ' → ' + (email || 'unassigned') + ' · ' + priority, 'Issue Tracker');
+      showToast('✅ Saved', 'success');
+      closeModal();
+    }).catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+  });
+}
+
+function issueSetStatus(id, status) {
+  var i = trackedIssues.find(function (x) { return x.id === id; }) || {};
+  var updates = { status: status, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+  if (status === 'fixed' || status === 'closed') {
+    updates.resolvedAt = firebase.firestore.FieldValue.serverTimestamp();
+    updates.resolvedBy = (currentAdmin.email || '').toLowerCase();
+  }
+  if (status === 'open' && _isDone(i)) updates.reopenedAt = firebase.firestore.FieldValue.serverTimestamp();
+  db.collection('trackedIssues').doc(id).set(updates, { merge: true }).then(function () {
+    if (i.assignedTo && i.assignedTo !== (currentAdmin.email || '').toLowerCase()) {
+      db.collection('adminInbox').add({
+        to: i.assignedTo, kind: 'issue_status',
+        title: '🔄 Issue status → ' + (ISSUE_STATUS[status] ? ISSUE_STATUS[status].label : status),
+        body: (i.title || '').slice(0, 160),
+        issueDocId: id,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: [],
+      }).catch(function () {});
+    }
+    logAudit('Issue status change', (i.shortId || id) + ' → ' + status, 'Issue Tracker');
+    showToast('✅ Status updated', 'success');
+    closeModal();
+  }).catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+// ── Sync + export ─────────────────────────────────────────────────────────
+function syncSentryNow() {
+  var btn = document.getElementById('issues-sync-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing…'; }
+  firebase.functions().httpsCallable('syncSentryIssues')({}).then(function (res) {
+    var d = res.data || {};
+    showToast('✅ Synced ' + (d.total || 0) + ' issues (' + (d.created || 0) + ' new)', 'success');
+    logAudit('Sentry sync', (d.total || 0) + ' issues', 'Issue Tracker');
+    _refreshIssueMeta();
+  }).catch(function (e) {
+    showToast('Sync failed: ' + (e.message || e), 'error');
+  }).finally(function () {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync from Sentry'; }
+  });
+}
+
+function _refreshIssueMeta() {
+  db.collection('issueTrackerMeta').doc('stats').get().then(function (s) {
+    _issueMetaCache = s.exists ? s.data() : null;
+    renderIssues();
+  }).catch(function () {});
+}
+// Load meta once shortly after start (listeners populate the rest).
+setTimeout(_refreshIssueMeta, 4000);
+
+function issuesExportCSV() {
+  var list = trackedIssues.filter(_issueMatchesFilters);
+  var headers = ['ID', 'Title', 'Severity', 'Status', 'Platform', 'Module', 'Screen', 'Events', 'Users', 'First Seen', 'Last Seen', 'Assignee', 'Sentry Link'];
+  var rows = list.map(function (i) {
+    return [i.shortId || i.id, i.title || '', i.priority || '', i.status || '', i.platform || '', i.module || '', i.screen || '', i.count || 0, i.userCount != null ? i.userCount : '', fDate(i.firstSeen), fDate(i.lastSeen), i.assignedTo || '', i.permalink || ''];
+  });
+  var csv = [headers.join(',')].concat(rows.map(function (r) {
+    return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+  })).join('\n');
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'issues-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
+  URL.revokeObjectURL(url);
+  logAudit('Export issues CSV', rows.length + ' rows', 'Issue Tracker');
+}
 </script>
 
 </body>
