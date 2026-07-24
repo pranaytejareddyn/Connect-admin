@@ -5291,6 +5291,17 @@ function empty(emoji, title, sub) {
 // gated, real-time). Sentry stays the source of truth; this module is the
 // management layer: assign, prioritise, status workflow, comments, audit.
 // ════════════════════════════════════════════════════════════════════════
+// esc() elsewhere in this page lives inside function/IIFE scopes — NOT global.
+// Without this fallback every esc() call below throws ReferenceError, which
+// aborted renderIssues() right after the stats cards (numbers visible, table
+// stuck on "Loading issues..."). Define a global HTML escaper if absent.
+if (typeof window.esc !== 'function') {
+  window.esc = function (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+}
 var issueFilters = { q: '', severity: '', platform: '', module: '', status: '', assignee: '', days: '' };
 var _issueEmployeesCache = null;
 var _issueMetaCache = null;
