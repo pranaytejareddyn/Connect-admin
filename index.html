@@ -5535,7 +5535,11 @@ function openIssueDetail(id) {
             infoRow('Sentry', i.permalink ? '<a href="' + esc(i.permalink) + '" target="_blank" rel="noopener">Open in Sentry ↗</a>' : '—') +
           '</div>' +
         '</div>' +
-        (i.stack ? '<div style="font-weight:600;font-size:12px;margin:8px 0 4px">Stack trace</div><pre style="background:#0F172A;color:#E2E8F0;font-size:11px;padding:10px;border-radius:8px;max-height:180px;overflow:auto;white-space:pre-wrap">' + esc(i.stack) + '</pre>' : '') +
+        (i.stack
+          ? '<div style="font-weight:600;font-size:12px;margin:8px 0 4px">Stack trace</div><pre style="background:#0F172A;color:#E2E8F0;font-size:11px;padding:10px;border-radius:8px;max-height:180px;overflow:auto;white-space:pre-wrap">' + esc(i.stack) + '</pre>'
+          : (i.sentryIssueId
+            ? '<div style="margin:8px 0"><button class="btn btn-ghost btn-sm" id="issue-full-report-btn" onclick="issueLoadFullReport(\'' + id + '\',\'' + esc(String(i.sentryIssueId)) + '\')">⤓ Load full error report (stack trace, device, OS)</button></div>'
+            : '')) +
         '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;align-items:flex-end">' +
           '<div style="flex:1;min-width:220px"><div class="modal-label">Assign to employee</div><select id="issue-assign-sel" class="form-input">' + empOpts + '</select></div>' +
           '<div style="min-width:140px"><div class="modal-label">Priority</div><select id="issue-priority-sel" class="form-input">' + sevOpts + '</select></div>' +
@@ -5638,6 +5642,33 @@ function issueSetStatus(id, status) {
     showToast('✅ Status updated', 'success');
     closeModal();
   }).catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+// ── Full report on demand (stack trace / device / OS via Cloud Function) ──
+function issueLoadFullReport(docId, sentryIssueId) {
+  var btn = document.getElementById('issue-full-report-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Fetching from Sentry…'; }
+  firebase.functions().httpsCallable('getSentryIssueDetail')({ docId: docId, issueId: sentryIssueId })
+    .then(function (res) {
+      var d = (res && res.data) || {};
+      // Merge into the local copy so the reopened modal shows it immediately
+      // (the onSnapshot listener will confirm from the server right after).
+      var i = trackedIssues.find(function (x) { return x.id === docId; });
+      if (i) {
+        if (d.stack) i.stack = d.stack;
+        if (d.device) i.device = d.device;
+        if (d.os) i.os = d.os;
+        if (d.release) i.release = d.release;
+        if (d.screen) i.screen = d.screen;
+        if (d.sentryUserId) i.sentryUserId = d.sentryUserId;
+      }
+      openIssueDetail(docId);
+      if (!d.stack) showToast('No stack trace available for this issue in Sentry', 'error');
+    })
+    .catch(function (e) {
+      if (btn) { btn.disabled = false; btn.textContent = '⤓ Load full error report (stack trace, device, OS)'; }
+      showToast('Could not fetch report: ' + (e.message || e), 'error');
+    });
 }
 
 // ── Sync + export ─────────────────────────────────────────────────────────
