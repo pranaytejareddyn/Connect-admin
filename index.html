@@ -870,6 +870,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         <div class="page-head">
           <div><div class="page-title">🛡️ Safety &amp; Moderation Center</div><div class="page-sub">Real-time AI moderation across chats, work posts, alerts, reviews, profiles &amp; agreements — flagged content, repeat offenders, and enforcement actions</div></div>
           <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost btn-sm" onclick="openWatchKeywords()">🔑 Watch Keywords</button>
             <button class="btn btn-ghost btn-sm" onclick="safetyExportCSV()">📥 Export</button>
           </div>
         </div>
@@ -883,7 +884,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
               <option value="">Severity: All</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
             </select>
             <select class="form-input" style="max-width:150px" onchange="safetyFilters.category=this.value;renderSafety()">
-              <option value="">Category: All</option><option value="violence">Violence</option><option value="sexual">Sexual</option><option value="illegal">Illegal</option><option value="harassment">Harassment</option><option value="fraud">Fraud</option>
+              <option value="">Category: All</option><option value="watchlist">Watchlist</option><option value="violence">Violence</option><option value="sexual">Sexual</option><option value="illegal">Illegal</option><option value="harassment">Harassment</option><option value="fraud">Fraud</option>
             </select>
             <select class="form-input" style="max-width:150px" onchange="safetyFilters.source=this.value;renderSafety()">
               <option value="">Source: All</option><option value="chat">Chats</option><option value="work_post">Work Posts</option><option value="alert">Alerts</option><option value="review">Reviews</option><option value="profile">Profiles</option><option value="agreement">Agreements</option>
@@ -6052,6 +6053,72 @@ function safetyExportCSV() {
   a.href = url; a.download = 'safety-incidents-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
   URL.revokeObjectURL(url);
   logAudit('Export safety incidents CSV', rows.length + ' rows', 'Safety Center');
+}
+</script>
+
+<script>
+// ── Watch Keywords (Safety Center) ─────────────────────────────────────
+// Admin-maintained custom keywords. Any use of these words anywhere in the
+// app (chats, posts, alerts, reviews, profiles, agreements) raises an
+// incident and pings the dashboard — whatever severity is chosen here.
+// The moderation functions cache this list for 60s, so new words apply
+// within a minute.
+function openWatchKeywords() {
+  db.collection('moderationConfig').doc('keywords').get().then(function (snap) {
+    var items = (snap.exists && Array.isArray(snap.data().items)) ? snap.data().items : [];
+    var rows = items.length === 0
+      ? '<div style="color:var(--text-mute);font-size:12.5px;padding:8px 0">No watch keywords yet. Add one below.</div>'
+      : items.map(function (k, i) {
+          return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">' +
+            '<b style="flex:1;font-size:13px">' + esc(k.word) + '</b>' +
+            '<span class="badge" style="background:var(--warning-light);color:var(--warning);text-transform:capitalize">' + esc(k.severity || 'medium') + '</span>' +
+            '<button class="btn btn-ghost btn-sm" onclick="watchRemoveKeyword(' + i + ')">✕</button></div>';
+        }).join('');
+    showModal(
+      '<div class="modal-header"><div class="modal-title">🔑 Watch Keywords</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
+      '<div class="modal-body">' +
+        '<p style="font-size:12.5px;color:var(--text-sec);margin-bottom:12px">Whenever a user or helper writes one of these words anywhere in the app, a Safety Center incident is created and you are notified instantly. Matching is evasion-aware (k3yword, k e y w o r d and similar tricks still match). New words take effect within a minute.</p>' +
+        '<div style="max-height:220px;overflow:auto;margin-bottom:12px">' + rows + '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<input id="wk-word" class="form-input" style="flex:1" placeholder="Add a keyword or phrase…"/>' +
+          '<select id="wk-sev" class="form-input" style="max-width:130px">' +
+            '<option value="low">Low</option><option value="medium" selected>Medium</option>' +
+            '<option value="high">High</option><option value="critical">Critical</option>' +
+          '</select>' +
+          '<button class="btn btn-primary" onclick="watchAddKeyword()">Add</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }).catch(function (e) { showToast('Could not load keywords: ' + e.message, 'error'); });
+}
+function watchAddKeyword() {
+  var word = (document.getElementById('wk-word').value || '').trim().toLowerCase();
+  var sev = document.getElementById('wk-sev').value || 'medium';
+  if (word.length < 2) { showToast('Keyword must be at least 2 characters', 'error'); return; }
+  db.collection('moderationConfig').doc('keywords').get().then(function (snap) {
+    var items = (snap.exists && Array.isArray(snap.data().items)) ? snap.data().items : [];
+    if (items.some(function (k) { return (k.word || '').toLowerCase() === word; })) {
+      showToast('Already on the list', 'error'); return;
+    }
+    items.push({ word: word, severity: sev, addedBy: currentAdmin.email || 'admin', addedAt: Date.now() });
+    return db.collection('moderationConfig').doc('keywords').set({ items: items }, { merge: true }).then(function () {
+      logAudit('Add watch keyword', word + ' (' + sev + ')', 'Safety Center');
+      showToast('✅ Watching "' + word + '"', 'success');
+      openWatchKeywords();
+    });
+  }).catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
+}
+function watchRemoveKeyword(idx) {
+  db.collection('moderationConfig').doc('keywords').get().then(function (snap) {
+    var items = (snap.exists && Array.isArray(snap.data().items)) ? snap.data().items : [];
+    var removed = items[idx];
+    items.splice(idx, 1);
+    return db.collection('moderationConfig').doc('keywords').set({ items: items }, { merge: true }).then(function () {
+      if (removed) logAudit('Remove watch keyword', removed.word, 'Safety Center');
+      showToast('Removed', 'success');
+      openWatchKeywords();
+    });
+  }).catch(function (e) { showToast('Failed: ' + e.message, 'error'); });
 }
 </script>
 
