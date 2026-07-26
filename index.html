@@ -1579,6 +1579,14 @@ function loadAll() {
     if (typeof renderIssues === 'function') renderIssues();
   }, err => console.log('trackedIssues listener error:', err)));
 
+  // ── issueTrackerMeta/stats (crash-free rate + "Last sync" label) ──
+  // Live so the 5-minute auto-sync (backend autoSyncSentryIssues) and manual
+  // syncs both refresh the meta strip automatically — no button press/reload.
+  unsubscribers.push(db.collection('issueTrackerMeta').doc('stats').onSnapshot(s => {
+    _issueMetaCache = s.exists ? s.data() : null;
+    if (typeof renderIssues === 'function') renderIssues();
+  }, err => console.log('issueTrackerMeta listener error:', err)));
+
   // ── moderationIncidents (Safety & Moderation Center) ──
   unsubscribers.push(db.collection('moderationIncidents').orderBy('createdAt', 'desc').limit(500).onSnapshot(snap => {
     modIncidents = snap.docs.map(d => ({ id: d.id, ...d.data() }));
