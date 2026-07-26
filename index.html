@@ -1239,7 +1239,10 @@ document.getElementById('login-btn').addEventListener('click', async () => {
     } catch (e) { email = ''; }
     if (!email) {
       setLoginLoading(false);
-      errBox.textContent = 'No admin account found for that Employee ID. Please check with your system administrator.';
+      // [ADMIN-01] Same generic wording as friendlyAuthError(). Employee IDs
+      // are sequential (EMP000001, EMP000002...), so a distinct "no such ID"
+      // message let an attacker enumerate every valid ID by simply counting up.
+      errBox.textContent = 'Those sign-in details are not correct. Please check and try again, or contact your system administrator.';
       errBox.style.display = 'block';
       return;
     }
