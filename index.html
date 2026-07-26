@@ -1026,6 +1026,19 @@ let userState='', userDistrict='', userCity='';
 let helperState='', helperDistrict='', helperCity='';
 let selectedUsers=new Set(), selectedHelpers=new Set();
 let currentAdmin = { email: '', name: 'Admin' };
+
+// [SEC-01] Audit label for documents that are PUBLICLY readable (currently
+// enabledRegions, which findmylocal.co reads unauthenticated). Never returns a
+// login email: these are super-admin accounts and an exposed address is a
+// ready-made target for phishing / credential stuffing. Falls back to the
+// email's local part so the trail stays useful without publishing the domain
+// or a usable address. Full emails still go to the admin-only audit log.
+function adminAuditLabel() {
+  const n = (currentAdmin.name || '').trim();
+  if (n && n.toLowerCase() !== 'admin') return n;
+  const local = (currentAdmin.email || '').split('@')[0];
+  return local ? local + ' (admin)' : 'Admin';
+}
 let charts = {};
 
 // Telangana districts (kept for backward compat)
@@ -3480,7 +3493,12 @@ function submitEnableRegion() {
   if (!state) { showToast('Select a state', 'error'); return; }
   const existing = enabledRegions.find(r => r.state?.toLowerCase() === state.toLowerCase() && (r.district || '').toLowerCase() === (district || '').toLowerCase());
   if (existing) { showToast('This region is already enabled', 'error'); return; }
-  const payload = { state, district, status, enabledBy: currentAdmin.email || 'Admin', enabledAt: firebase.firestore.FieldValue.serverTimestamp() };
+  // [SEC-01] enabledRegions is PUBLICLY readable — findmylocal.co reads it
+  // unauthenticated for live coverage — so a login email written here is
+  // harvestable by anyone on the internet, and these are super-admin accounts.
+  // Store a non-email display label instead. The full email stays in the
+  // admin-only audit log written by logAudit() below.
+  const payload = { state, district, status, enabledBy: adminAuditLabel(), enabledAt: firebase.firestore.FieldValue.serverTimestamp() };
   db.collection('enabledRegions').add(payload).then(() => {
     logAudit('Enable region', `${state}${district ? ' / ' + district : ''} (${status})`);
     showToast('✅ Region enabled. Users can now register there.', 'success');
@@ -3502,7 +3520,8 @@ function changeRegionStatus(id) {
 
 function submitChangeRegionStatus(id) {
   const newStatus = document.getElementById('cs-status').value;
-  db.collection('enabledRegions').doc(id).update({ status: newStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: currentAdmin.email || 'Admin' }).then(() => {
+  // [SEC-01] non-email label only — this document is world-readable.
+  db.collection('enabledRegions').doc(id).update({ status: newStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: adminAuditLabel() }).then(() => {
     const r = enabledRegions.find(x => x.id === id);
     logAudit('Update region status', `${r?.state}${r?.district ? ' / ' + r.district : ''} → ${newStatus}`);
     showToast('✅ Status updated', 'success');
