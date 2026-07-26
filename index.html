@@ -2487,8 +2487,29 @@ function verifyHelperDocument(id, kind) {
 // Backwards-compatible with legacy helpers (falls back to h.documents.* fields
 // when new structured h.idProof / h.residencyProof / h.selfieUrl are absent).
 // ============================================================================
+// [SEC-A] KYC document URLs live in helpers/{uid}/private/kyc, which only the
+// owner and admins can read — they used to sit on the world-readable helper
+// profile, so any signed-up account could pull every helper's Aadhaar/PAN scan,
+// selfie and address proof. The admin has the `admin` claim, so it can read the
+// private doc; fetch it once, cache it on the in-memory helper object, and
+// re-open the modal so the existing render path picks the URLs up.
+async function hydrateHelperKyc(h) {
+  if (h.__kycLoaded) return false;
+  h.__kycLoaded = true;
+  try {
+    const s = await db.collection('helpers').doc(h.id).collection('private').doc('kyc').get();
+    if (s.exists) { h.__kyc = s.data() || {}; return true; }
+  } catch (e) { console.log('KYC hydrate failed (showing legacy fields only):', e); }
+  return false;
+}
+
 function viewHelper(id) {
   const h = helpers.find(x => x.id === id); if (!h) return;
+
+  // Load the private KYC doc on first open, then re-render with the URLs.
+  if (!h.__kycLoaded) {
+    hydrateHelperKyc(h).then(function (got) { if (got) viewHelper(id); });
+  }
 
   // Build location string with all available granularity.
   const locFull = [
@@ -2504,15 +2525,18 @@ function viewHelper(id) {
   // app's "Get Verified" submits everything under h.verificationRequest, so
   // that MUST be read first or the admin sees no documents.
   const vr = h.verificationRequest || {};
+  // [SEC-A] Private KYC doc first (current), then the legacy public fields so
+  // helpers who have not been migrated yet still render correctly.
+  const pk = h.__kyc || {};
   const vrStatus = vr.status || null;               // pending|verified|rejected|info_requested
-  const selfieUrl = vr.selfieUrl || h.selfieUrl || h.documents?.selfie || null;
-  const idProofUrl = vr.idProofUrl || h.idProof?.url || h.documents?.aadhar || null;
-  const idProofType = vr.idProofType || h.idProof?.type || (h.documents?.aadhar ? 'aadhaar (legacy)' : null);
+  const selfieUrl = pk.selfieUrl || vr.selfieUrl || h.selfieUrl || h.documents?.selfie || null;
+  const idProofUrl = pk.idProofUrl || vr.idProofUrl || h.idProof?.url || h.documents?.aadhar || null;
+  const idProofType = pk.idProofType || vr.idProofType || h.idProof?.type || (h.documents?.aadhar ? 'aadhaar (legacy)' : null);
   const idProofVerified = vrStatus === 'verified' || !!h.idProof?.verified;
   const idVerifiedAt = vr.reviewedAt || h.idProof?.verifiedAt;
   const idVerifiedBy = vr.reviewedBy || h.idProof?.verifiedBy;
-  const resProofUrl = vr.addressProofUrl || h.residencyProof?.url || h.documents?.addressProof || null;
-  const resProofType = vr.addressProofType || h.residencyProof?.type || (h.documents?.addressProof ? 'address proof (legacy)' : null);
+  const resProofUrl = pk.addressProofUrl || vr.addressProofUrl || h.residencyProof?.url || h.documents?.addressProof || null;
+  const resProofType = pk.addressProofType || vr.addressProofType || h.residencyProof?.type || (h.documents?.addressProof ? 'address proof (legacy)' : null);
   const resProofVerified = vrStatus === 'verified' || !!h.residencyProof?.verified;
   const resVerifiedAt = vr.reviewedAt || h.residencyProof?.verifiedAt;
   const resVerifiedBy = vr.reviewedBy || h.residencyProof?.verifiedBy;
