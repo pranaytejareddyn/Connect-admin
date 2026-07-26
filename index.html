@@ -4,6 +4,44 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connect Admin · Pan-India Dashboard</title>
+
+<!-- ═══ SECURITY HEADERS ═══════════════════════════════════════════════════
+     This dashboard renders real user PII (phone numbers, addresses, ID
+     documents) and can block accounts / grant admin roles. It is served from
+     GitHub Pages, which cannot set response headers, so the equivalents are
+     declared here as meta directives.
+
+     CSP notes:
+       • 'unsafe-inline' is required for script-src because the whole
+         application ships as inline script blocks with inline onclick
+         handlers. It still blocks injection of EXTERNAL script sources,
+         which is the main XSS exfiltration path.
+       • connect-src is pinned to Google/Firebase endpoints, so even a
+         successful injection cannot POST scraped PII to an attacker origin.
+       • frame-ancestors 'none' + X-Frame-Options block clickjacking of the
+         block/approve/role-grant controls.
+-->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' https://www.gstatic.com https://cdn.jsdelivr.net https://www.google.com https://apis.google.com;
+  style-src  'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src   'self' https://fonts.gstatic.com data:;
+  img-src    'self' data: blob: https:;
+  connect-src 'self'
+    https://*.googleapis.com https://*.google.com https://*.gstatic.com
+    https://*.cloudfunctions.net https://*.firebaseio.com https://*.firebasestorage.app
+    https://firestore.googleapis.com https://identitytoolkit.googleapis.com
+    https://securetoken.googleapis.com wss://*.firebaseio.com;
+  frame-src  https://www.google.com https://*.firebaseapp.com;
+  object-src 'none';
+  base-uri   'self';
+  form-action 'none';
+  frame-ancestors 'none';
+">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="X-Frame-Options" content="DENY">
+<meta name="robots" content="noindex,nofollow,noarchive">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -1150,12 +1188,17 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 function friendlyAuthError(e) {
   const code = (e && e.code) || '';
   switch (code) {
+    // [ADMIN-01] USER ENUMERATION: these two cases used to return DIFFERENT
+    // messages, so an attacker could tell a real admin address from a fake one
+    // just by reading the error — handing them a verified target list for
+    // phishing / credential stuffing against super-admin accounts. Firebase's
+    // platform-level enumeration protection currently masks this, but that is a
+    // console setting anyone could switch off. Both now return one message.
     case 'auth/wrong-password':
     case 'auth/invalid-credential':
     case 'auth/invalid-login-credentials':
-      return 'Incorrect password. If you\'ve forgotten it, please contact your system administrator to reset it.';
     case 'auth/user-not-found':
-      return 'No admin account found for those details. Please check with your system administrator.';
+      return 'Those sign-in details are not correct. Please check and try again, or contact your system administrator.';
     case 'auth/invalid-email':
       return 'That doesn\'t look like a valid email or Employee ID.';
     case 'auth/user-disabled':
@@ -1279,6 +1322,51 @@ function showAdminMenu() {
     setTimeout(() => auth.signOut().then(() => location.reload()), 350);
   }
 }
+
+// ── [ADMIN-02] Idle auto-logout ────────────────────────────────────────────
+// A Firebase web session refreshes indefinitely, so an admin who walked away
+// from an unlocked machine left a live, fully-privileged dashboard open — one
+// that can read every user's PII and block accounts or grant admin roles.
+// 30 minutes of no input signs out; a warning appears one minute earlier so
+// nobody loses work mid-edit.
+(function initIdleLogout() {
+  var IDLE_MS = 30 * 60 * 1000;
+  var WARN_MS = 29 * 60 * 1000;
+  var idleTimer = null, warnTimer = null, warned = false;
+
+  function forceIdleLogout() {
+    try { logAudit('Signed out', 'Automatic sign-out after 30 minutes idle', 'user_role_management'); } catch (_) {}
+    try { activityMarkOffline(); } catch (_) {}
+    setTimeout(function () {
+      auth.signOut().then(function () {
+        location.reload();
+      }).catch(function () { location.reload(); });
+    }, 250);
+  }
+
+  function reset() {
+    warned = false;
+    clearTimeout(idleTimer); clearTimeout(warnTimer);
+    // Only arm while actually signed in.
+    if (!auth.currentUser) return;
+    warnTimer = setTimeout(function () {
+      warned = true;
+      try { showToast('You will be signed out in 1 minute due to inactivity.', 'warning'); } catch (_) {}
+    }, WARN_MS);
+    idleTimer = setTimeout(forceIdleLogout, IDLE_MS);
+  }
+
+  ['mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(function (ev) {
+    document.addEventListener(ev, reset, { passive: true, capture: true });
+  });
+  // Re-arm whenever auth state settles (login) and disarm on sign-out.
+  try {
+    auth.onAuthStateChanged(function (u) {
+      if (u) reset();
+      else { clearTimeout(idleTimer); clearTimeout(warnTimer); }
+    });
+  } catch (_) {}
+})();
 
 // ── Nav ──
 document.querySelectorAll('.nav-item').forEach(item => {
