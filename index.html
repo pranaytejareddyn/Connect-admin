@@ -145,6 +145,29 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .search-input { width: 100%; padding: 9px 14px 9px 38px; border: 1.5px solid var(--border); border-radius: 8px; font-size: 13px; background: var(--bg-alt); color: var(--text); font-family: inherit; }
 .search-input:focus { outline: none; border-color: var(--primary); background: var(--surface); }
 .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 14px; color: var(--text-mute); }
+/* ═══ Global search results — anchored to .search-box (position:relative) ═══ */
+.gs-results {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 300;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  max-height: 420px; overflow-y: auto; padding: 6px;
+}
+.gs-group { font-size: 10px; font-weight: 800; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--text-mute); padding: 8px 10px 4px; }
+.gs-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px;
+  cursor: pointer; transition: background 0.12s ease; }
+.gs-item:hover, .gs-item.gs-active { background: var(--bg-alt); }
+.gs-avatar { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 14px; }
+.gs-body { min-width: 0; flex: 1; }
+.gs-title { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.gs-meta { font-size: 11px; color: var(--text-sec); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.gs-meta code { background: var(--bg-alt); padding: 1px 5px; border-radius: 4px; font-weight: 700; }
+.gs-empty { padding: 18px 12px; text-align: center; font-size: 13px; color: var(--text-mute); }
+.gs-hint { padding: 8px 10px; font-size: 11px; color: var(--text-mute); border-top: 1px solid var(--border); margin-top: 4px; }
+.gs-mark { background: var(--warning-light); color: var(--text); border-radius: 3px; padding: 0 1px; }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .icon-btn { width: 36px; height: 36px; border: none; background: var(--bg-alt); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 15px; color: var(--text-sec); transition: all 0.15s; position: relative; }
 .icon-btn:hover { background: var(--border); color: var(--text); }
@@ -503,7 +526,9 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="topbar">
       <div class="search-box">
         <span class="search-icon">🔍</span>
-        <input type="text" class="search-input" id="global-search" placeholder="Search users, helpers, alerts, reports..."/>
+        <input type="text" class="search-input" id="global-search" autocomplete="off"
+               placeholder="Search by name, public ID, phone, ticket…"/>
+        <div class="gs-results" id="global-search-results" hidden></div>
       </div>
       <div class="top-actions">
         <button class="icon-btn" id="theme-toggle" title="Toggle theme">🌙</button>
@@ -1467,7 +1492,191 @@ document.getElementById('helper-state-filter')?.addEventListener('change', e => 
 document.getElementById('user-city-filter')?.addEventListener('change', e => { userCity = e.target.value; renderUsers(); });
 document.getElementById('helper-city-filter')?.addEventListener('change', e => { helperCity = e.target.value; renderHelpers(); });
 
-document.getElementById('global-search').addEventListener('input', e => {});
+// ═══ Global search ═════════════════════════════════════════════════════════
+//
+// This was an EMPTY handler — `addEventListener('input', e => {})`. The box was
+// in the topbar on every page, invited a query, and silently did nothing with
+// it. Typing a name or an ID returned no result and no message, which reads as
+// "no matches" rather than "not implemented".
+//
+// Searches the collections already held in memory from the live onSnapshot
+// listeners, so there is no extra read and results track the database in real
+// time. Matching is intentionally broad — an admin arriving from a report has
+// a public ID; from a phone call, a number; from a ticket, a ticket id.
+const GS_MAX_PER_GROUP = 5;
+
+function gsEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+// Highlight the matched span so it is obvious WHY a row matched — e.g. the
+// query hit a phone number rather than the name being shown.
+function gsMark(text, q) {
+  const safe = gsEsc(text);
+  if (!q) return safe;
+  const i = safe.toLowerCase().indexOf(q);
+  if (i < 0) return safe;
+  return safe.slice(0, i) + '<span class="gs-mark">' + safe.slice(i, i + q.length) + '</span>' + safe.slice(i + q.length);
+}
+const gsHas = (v, q) => String(v == null ? '' : v).toLowerCase().includes(q);
+
+function gsSearch(q) {
+  const groups = [];
+  const add = (label, rows) => { if (rows.length) groups.push({ label, rows }); };
+
+  add('Helpers', helpers.filter(h =>
+    gsHas(h.name, q) || gsHas(h.publicId, q) || gsHas(h.phone, q) ||
+    gsHas(h.id, q) || gsHas(h.district, q) || (h.skills || []).some(s => gsHas(s, q))
+  ).slice(0, GS_MAX_PER_GROUP).map(h => ({
+    icon: '🛡️', tone: 'primary', title: h.name || 'Unnamed helper',
+    meta: [h.publicId ? `<code>${gsMark(h.publicId, q)}</code>` : '', gsMark(h.phone || '', q),
+           gsEsc(h.district || ''), gsEsc(h.status || '')].filter(Boolean).join(' · '),
+    fn: 'viewHelper', id: h.id,
+  })));
+
+  add('Users', users.filter(u =>
+    gsHas(u.name, q) || gsHas(u.publicId, q) || gsHas(u.phone, q) ||
+    gsHas(u.id, q) || gsHas(u.district, q)
+  ).slice(0, GS_MAX_PER_GROUP).map(u => ({
+    icon: '👥', tone: 'info', title: u.name || 'Unnamed user',
+    meta: [u.publicId ? `<code>${gsMark(u.publicId, q)}</code>` : '', gsMark(u.phone || '', q),
+           gsEsc(u.district || '')].filter(Boolean).join(' · '),
+    fn: 'viewUser', id: u.id,
+  })));
+
+  add('Reports', reports.filter(r =>
+    gsHas(r.ticketId, q) || gsHas(r.subject, q) || gsHas(r.reporterName, q) ||
+    gsHas(r.reportedUserName, q) || gsHas(r.reportedUserPublicId, q) || gsHas(r.reporterPhone, q)
+  ).slice(0, GS_MAX_PER_GROUP).map(r => ({
+    icon: '🚩', tone: 'danger', title: r.subject || r.ticketId || 'Report',
+    meta: [r.ticketId ? `<code>${gsMark(r.ticketId, q)}</code>` : '',
+           r.reportedUserName ? `re: ${gsMark(r.reportedUserName, q)}` : '',
+           gsEsc(r.status || '')].filter(Boolean).join(' · '),
+    fn: 'viewReport', id: r.id,
+  })));
+
+  add('Alerts', alerts.filter(a =>
+    gsHas(a.type, q) || gsHas(a.description, q) || gsHas(a.userName, q) ||
+    gsHas(a.district, q) || gsHas(a.village, q)
+  ).slice(0, GS_MAX_PER_GROUP).map(a => ({
+    icon: '🚨', tone: 'warning', title: a.type || 'Emergency alert',
+    meta: [gsEsc(a.userName || ''), gsEsc([a.village, a.district].filter(Boolean).join(', ')),
+           gsEsc(a.status || '')].filter(Boolean).join(' · '),
+    fn: 'viewAlert', id: a.id,
+  })));
+
+  add('Work Posts', workPostsData.filter(w =>
+    gsHas(w.title, q) || gsHas(w.category, q) || gsHas(w.district, q) || gsHas(w.village, q)
+  ).slice(0, GS_MAX_PER_GROUP).map(w => ({
+    icon: '💼', tone: 'success', title: w.title || 'Work post',
+    meta: [gsEsc(w.category || ''), gsEsc([w.village, w.district].filter(Boolean).join(', ')),
+           gsEsc(w.status || '')].filter(Boolean).join(' · '),
+    fn: 'viewWorkPost', id: w.id,
+  })));
+
+  return groups;
+}
+
+function gsRender(q) {
+  const box = document.getElementById('global-search-results');
+  if (!box) return;
+  if (!q || q.length < 2) { box.hidden = true; box.innerHTML = ''; return; }
+
+  const groups = gsSearch(q);
+  const total = groups.reduce((n, g) => n + g.rows.length, 0);
+  box.hidden = false;
+
+  if (!total) {
+    box.innerHTML = `<div class="gs-empty">No matches for <strong>${gsEsc(q)}</strong><br>
+      <span style="font-size:11px">Try a name, public ID (H-… / U-…), phone number or ticket ID.</span></div>`;
+    return;
+  }
+
+  box.innerHTML = groups.map(g =>
+    `<div class="gs-group">${g.label}</div>` + g.rows.map(r =>
+      `<div class="gs-item" data-fn="${r.fn}" data-id="${gsEsc(r.id)}">
+         <div class="gs-avatar" style="background:var(--${r.tone}-light)">${r.icon}</div>
+         <div class="gs-body">
+           <div class="gs-title">${gsMark(r.title, q)}</div>
+           <div class="gs-meta">${r.meta}</div>
+         </div>
+       </div>`).join('')
+  ).join('') + `<div class="gs-hint">↑↓ to navigate · Enter to open · Esc to close</div>`;
+}
+
+function gsClose() {
+  const box = document.getElementById('global-search-results');
+  if (box) { box.hidden = true; box.innerHTML = ''; }
+}
+
+function gsOpen(el) {
+  if (!el) return;
+  const fn = el.dataset.fn, id = el.dataset.id;
+  gsClose();
+  const input = document.getElementById('global-search');
+  if (input) input.value = '';
+  // viewWorkPost is async — without catching, a failure there would reject
+  // silently and the click would look like it did nothing.
+  try {
+    const r = typeof window[fn] === 'function' ? window[fn](id) : null;
+    if (r && typeof r.catch === 'function') {
+      r.catch(err => { console.log('global search open failed:', err); showToast('Could not open that record', 'error'); });
+    }
+  } catch (err) {
+    console.log('global search open failed:', err);
+    showToast('Could not open that record', 'error');
+  }
+}
+
+(function installGlobalSearch() {
+  const input = document.getElementById('global-search');
+  const box = document.getElementById('global-search-results');
+  if (!input || !box) return;
+
+  let timer = null;
+  input.addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    clearTimeout(timer);
+    // Debounced so a fast typist doesn't re-render the list on every keystroke.
+    timer = setTimeout(() => gsRender(q), 120);
+  });
+
+  input.addEventListener('focus', e => {
+    const q = e.target.value.trim().toLowerCase();
+    if (q.length >= 2) gsRender(q);
+  });
+
+  // Keyboard: arrows move the highlight, Enter opens it, Esc dismisses.
+  input.addEventListener('keydown', e => {
+    const items = [...box.querySelectorAll('.gs-item')];
+    if (e.key === 'Escape') { gsClose(); input.blur(); return; }
+    if (!items.length) return;
+    const cur = items.findIndex(i => i.classList.contains('gs-active'));
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = e.key === 'ArrowDown'
+        ? (cur + 1) % items.length
+        : (cur <= 0 ? items.length - 1 : cur - 1);
+      items.forEach(i => i.classList.remove('gs-active'));
+      items[next].classList.add('gs-active');
+      items[next].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      gsOpen(items[cur >= 0 ? cur : 0]);
+    }
+  });
+
+  box.addEventListener('click', e => {
+    const row = e.target.closest('.gs-item');
+    if (row) gsOpen(row);
+  });
+
+  // Dismiss on an outside click, but not on a click inside the box itself.
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.search-box')) gsClose();
+  });
+})();
 
 // ── Broadcast audience listener ──
 document.getElementById('bc-audience').addEventListener('change', e => {
