@@ -1949,6 +1949,8 @@ function renderUsers() {
   if (userSearchText) {
     f = f.filter(u =>
       (u.name||'').toLowerCase().includes(userSearchText) ||
+      // Public ID — the unambiguous handle when names collide.
+      (u.publicId||'').toLowerCase().includes(userSearchText) ||
       (u.phone||'').toLowerCase().includes(userSearchText) ||
       (u.district||'').toLowerCase().includes(userSearchText) ||
       (u.state||'').toLowerCase().includes(userSearchText) ||
@@ -2026,6 +2028,16 @@ function userVerificationBadge(status) {
     incomplete: '<span class="badge badge-warning">⚠️ Incomplete</span>',
   };
   return map[status] || '<span class="badge badge-secondary">— Not submitted</span>';
+}
+
+// Jump from a report straight to the account it names. The role matters: one
+// uid can hold both a user and a helper profile, so the report records which
+// side was reported and we open that one.
+function openReportedParty(id, role) {
+  closeModal();
+  setTimeout(() => {
+    if (role === 'user') viewUser(id); else viewHelper(id);
+  }, 180);
 }
 
 function viewUser(id) {
@@ -2129,6 +2141,7 @@ function viewUser(id) {
       ${u.photoURL ? `<div style="text-align:center;margin-bottom:16px"><img class="lb-thumb" src="${u.photoURL}" style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:3px solid var(--border);cursor:zoom-in" alt="Profile picture"/></div>` : ''}
       ${mf('Name', u.name || '—')}
       ${mf('Phone', u.phone || '—')}
+      ${mf('Public ID', `<code style="font-size:14px;font-weight:800">${u.publicId || '—'}</code>`)}
       ${mf('User ID', `<code>${u.id}</code>`)}
       ${u.age ? mf('Age', u.age + ' years') : ''}
       ${mf('Date of Birth', u.dateOfBirth ? new Date(u.dateOfBirth).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'No Info')}
@@ -2350,6 +2363,8 @@ function renderHelpers() {
   if (helperSearchText) {
     f = f.filter(h =>
       (h.name||'').toLowerCase().includes(helperSearchText) ||
+      // Public ID — the unambiguous handle when names collide.
+      (h.publicId||'').toLowerCase().includes(helperSearchText) ||
       (h.phone||'').toLowerCase().includes(helperSearchText) ||
       (h.skills||[]).some(s => s.toLowerCase().includes(helperSearchText)) ||
       (h.district||'').toLowerCase().includes(helperSearchText) ||
@@ -2641,6 +2656,8 @@ function viewHelper(id) {
       <!-- Personal Info -->
       <div class="modal-section-header">👤 Personal Info</div>
       ${mf('Full Name', h.name || '—')}
+      ${mf('Public ID', `<code style="font-size:14px;font-weight:800">${h.publicId || '—'}</code>`)}
+      ${mf('Account ID', `<code>${h.id}</code>`)}
       ${mf('Age', h.age ? `${h.age} years` : '—')}
       ${mf('Gender', h.gender ? h.gender.charAt(0).toUpperCase() + h.gender.slice(1) : '—')}
       ${mf('Languages', langsChips)}
@@ -2960,13 +2977,16 @@ function renderReports() {
   else if (reportFilter === 'critical') f = f.filter(r => (r.severity || r.priority) === 'critical');
   else if (['open','in_review','waiting_for_response','resolved','closed'].includes(reportFilter)) f = f.filter(r => (r.status||'open') === reportFilter);
   document.getElementById('reports-table').innerHTML = f.length === 0 ? empty('🐛','No reports','No reports match') :
-    `<table class="table"><thead><tr><th>Ticket</th><th>Reporter</th><th>Primary Type</th><th>Category</th><th>Subject</th><th>Severity</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(r => {
+    `<table class="table"><thead><tr><th>Ticket</th><th>Reporter</th><th>Reported</th><th>Primary Type</th><th>Category</th><th>Subject</th><th>Severity</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(r => {
       const typeBadge = r.reporterType === 'helper' ? '<span class="badge badge-purple">🛡️ Helper</span>' : '<span class="badge badge-primary">👥 User</span>';
       const primaryBadge = r.primaryType === 'complaint' ? '<span class="badge badge-danger">🗣️ Complaint</span>' : '<span class="badge badge-info">⚙️ Technical</span>';
       const severity = r.severity || r.priority || 'medium';
       return `<tr>
         <td><code style="font-weight:700">${r.ticketId || r.id.slice(0,6).toUpperCase()}</code></td>
         <td>${r.reporterName || '—'}<br><span class="user-meta">${typeBadge} ${r.reporterPhone || ''}</span></td>
+        <td>${r.reportedUserId
+              ? `${r.reportedUserName || '—'}<br><span class="user-meta"><code style="font-weight:700">${r.reportedUserPublicId || r.reportedUserId}</code></span>`
+              : '<span class="user-meta">—</span>'}</td>
         <td>${primaryBadge}</td>
         <td>${r.categoryLabel || (r.category || '—').replace('_',' ')}</td>
         <td>${(r.subject || '—').substring(0, 50)}</td>
@@ -2999,7 +3019,24 @@ function viewReport(id) {
       ${mf('Account ID', `<code>${r.reporterId || '—'}</code>`)}
       ${mf('Phone', r.reporterPhone || '—')}
       ${r.reporterEmail ? mf('Email', r.reporterEmail) : ''}
+      ${mf('Public ID', `<code>${r.reporterPublicId || '—'}</code>`)}
       ${r.reporterDistrict ? mf('District', r.reporterDistrict) : ''}
+      ${r.reportedUserId ? `
+      <div class="modal-section-header">🚩 Reported Party</div>
+      ${mf('Type', r.reportedUserRole === 'user' ? '👥 User' : '🛡️ Helper')}
+      ${mf('Name', `<strong>${r.reportedUserName || '—'}</strong>`)}
+      ${mf('Public ID', `<code style="font-size:14px;font-weight:800">${r.reportedUserPublicId || '—'}</code>`)}
+      ${mf('Account ID', `<code>${r.reportedUserId}</code>`)}
+      ${mf('Phone', r.reportedUserPhone || '—')}
+      ${r.reportedUserDistrict ? mf('District', r.reportedUserDistrict) : ''}
+      <div class="modal-field">
+        <button class="btn btn-secondary btn-sm"
+          onclick="openReportedParty('${r.reportedUserId}','${r.reportedUserRole || 'helper'}')">
+          🔍 Open this ${r.reportedUserRole === 'user' ? 'user' : 'helper'}
+        </button>
+      </div>` : `
+      <div class="modal-section-header">🚩 Reported Party</div>
+      <div class="modal-field"><span class="user-meta">General report — no specific account was named.</span></div>`}
       <div class="modal-section-header">🐛 Issue Details</div>
       ${mf('Subject', `<strong>${r.subject || '—'}</strong>`)}
       ${mf('Description', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${r.description || '—'}</div>`)}
