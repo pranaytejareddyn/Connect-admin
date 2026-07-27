@@ -1793,7 +1793,7 @@ function loadAll() {
   tearDownListeners();
 
   // ── users ──
-  unsubscribers.push(db.collection('users').onSnapshot(snap => {
+  unsubscribers.push(db.collection('users').orderBy('createdAt','desc').limit(1500).onSnapshot(snap => {
     users = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     if (!userState) populateDistrictsForFilter('user', '');
@@ -1802,7 +1802,7 @@ function loadAll() {
   }, err => console.log('users listener error:', err)));
 
   // ── helpers (also drives Verification page since it filters helpers) ──
-  unsubscribers.push(db.collection('helpers').onSnapshot(snap => {
+  unsubscribers.push(db.collection('helpers').orderBy('createdAt','desc').limit(1500).onSnapshot(snap => {
     helpers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-helpers', helpers.filter(h => (h.status||'pending') === 'pending').length);
@@ -1814,7 +1814,7 @@ function loadAll() {
   }, err => console.log('helpers listener error:', err)));
 
   // ── emergencyAlerts ──
-  unsubscribers.push(db.collection('emergencyAlerts').onSnapshot(snap => {
+  unsubscribers.push(db.collection('emergencyAlerts').orderBy('createdAt','desc').limit(500).onSnapshot(snap => {
     alerts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-alerts', alerts.filter(a => (a.status||'pending')==='pending' || a.status==='resubmitted').length);
@@ -1823,7 +1823,7 @@ function loadAll() {
   }, err => console.log('alerts listener error:', err)));
 
   // ── reports ──
-  unsubscribers.push(db.collection('reports').onSnapshot(snap => {
+  unsubscribers.push(db.collection('reports').orderBy('createdAt','desc').limit(500).onSnapshot(snap => {
     reports = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-reports', reports.filter(r => (r.status||'open')==='open').length);
@@ -1832,14 +1832,14 @@ function loadAll() {
   }, err => console.log('reports listener error:', err)));
 
   // ── reviews ──
-  unsubscribers.push(db.collection('reviews').onSnapshot(snap => {
+  unsubscribers.push(db.collection('reviews').orderBy('createdAt','desc').limit(1000).onSnapshot(snap => {
     reviews = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     renderReviews();
   }, err => console.log('reviews listener error:', err)));
 
   // ── userReviews (Helper→User) ──
-  unsubscribers.push(db.collection('userReviews').onSnapshot(snap => {
+  unsubscribers.push(db.collection('userReviews').orderBy('createdAt','desc').limit(1000).onSnapshot(snap => {
     userReviews = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.submittedAt) - msOf(a.submittedAt));
     renderUserReviews();
@@ -1853,7 +1853,7 @@ function loadAll() {
   }, err => console.log('chats listener error:', err)));
 
   // ── appeals ──
-  unsubscribers.push(db.collection('appeals').onSnapshot(snap => {
+  unsubscribers.push(db.collection('appeals').orderBy('createdAt','desc').limit(500).onSnapshot(snap => {
     appeals = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-appeals', appeals.filter(a => a.status === 'submitted').length);
@@ -1861,7 +1861,7 @@ function loadAll() {
   }, err => console.log('appeals listener error:', err)));
 
   // ── agreements ──
-  unsubscribers.push(db.collection('agreements').onSnapshot(snap => {
+  unsubscribers.push(db.collection('agreements').orderBy('createdAt','desc').limit(1000).onSnapshot(snap => {
     agreements = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-agreements', agreements.filter(a => a.status === 'disputed').length);
@@ -1869,7 +1869,7 @@ function loadAll() {
   }, err => console.log('agreements listener error:', err)));
 
   // ── workPosts (Post a Work) ──
-  unsubscribers.push(db.collection('workPosts').onSnapshot(snap => {
+  unsubscribers.push(db.collection('workPosts').orderBy('createdAt','desc').limit(1000).onSnapshot(snap => {
     workPostsData = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-work', workPostsData.filter(w => (w.status || '') === 'active').length);
@@ -1892,7 +1892,7 @@ function loadAll() {
   }, err => console.log('enabledRegions listener error:', err)));
 
   // ── locationChangeRequests ──
-  unsubscribers.push(db.collection('locationChangeRequests').onSnapshot(snap => {
+  unsubscribers.push(db.collection('locationChangeRequests').orderBy('createdAt','desc').limit(500).onSnapshot(snap => {
     locationRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-location-requests', locationRequests.filter(r => r.status === 'pending' || r.status === 'info_requested').length);
@@ -3226,24 +3226,29 @@ async function approveAlert(id) {
     const audience = a.audienceType || 'both';
     const emoji = a.urgency === 'critical' ? '🔴' : a.urgency === 'high' ? '🟠' : '🟡';
     const reward = (a.isRewardEnabled && a.rewardAmount > 0) ? ` · ₹${Number(a.rewardAmount).toLocaleString('en-IN')}` : '';
+    // [SCALE-11] Was one SEQUENTIAL notifications.add() per recipient — with a
+    // populous district that is thousands of round-trips from this browser tab;
+    // closing the tab mid-way left a partial fan-out. Now: recipient reads are
+    // capped per district, and writes go in 450-op batches.
     let count = 0;
+    const payload = (uid) => ({ userId: uid, type: 'emergency_alert', title: `${emoji} Emergency Alert in Your Area`, body: `${a.title||'Alert'}${reward} — Tap to view`, data: { alertId: id, screen: 'AlertDetail', urgency: a.urgency||'high' }, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    const recipients = new Set();
     for (const d of districts) {
       if (audience === 'public' || audience === 'both') {
-        const us = await db.collection('users').where('district','==',d).get();
-        for (const doc of us.docs) {
-          if (doc.id !== a.userId) {
-            await db.collection('notifications').add({ userId: doc.id, type: 'emergency_alert', title: `${emoji} Emergency Alert in Your Area`, body: `${a.title||'Alert'}${reward} — Tap to view`, data: { alertId: id, screen: 'AlertDetail', urgency: a.urgency||'high' }, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-            count++;
-          }
-        }
+        const us = await db.collection('users').where('district','==',d).limit(2000).get();
+        us.docs.forEach(doc => { if (doc.id !== a.userId) recipients.add(doc.id); });
       }
       if (audience === 'helpers' || audience === 'both') {
-        const hs = await db.collection('helpers').where('district','==',d).where('status','==','approved').get();
-        for (const doc of hs.docs) {
-          await db.collection('notifications').add({ userId: doc.id, type: 'emergency_alert', title: `${emoji} Emergency Alert in Your Area`, body: `${a.title||'Alert'}${reward} — Tap to view`, data: { alertId: id, screen: 'AlertDetail', urgency: a.urgency||'high' }, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-          count++;
-        }
+        const hs = await db.collection('helpers').where('district','==',d).where('status','==','approved').limit(2000).get();
+        hs.docs.forEach(doc => recipients.add(doc.id));
       }
+    }
+    const ids = [...recipients];
+    for (let i = 0; i < ids.length; i += 450) {
+      const batch = db.batch();
+      ids.slice(i, i + 450).forEach(uid => batch.set(db.collection('notifications').doc(), payload(uid)));
+      await batch.commit();
+      count += Math.min(450, ids.length - i);
     }
     logAudit('Approve alert', `"${a.title}" — notified ${count} people`);
     showToast(`✅ Approved! Notified ${count} people in ${districts.length} districts.`, 'success');
@@ -4066,8 +4071,17 @@ function submitRestriction() {
       let q = db.collection(coll);
       if (districts.length > 0) q = q.where('district', 'in', districts.slice(0, 10));
       else q = q.where('state', '==', state);
-      q.get().then(snap => {
-        snap.docs.forEach(d => db.collection('notifications').add({ userId: d.id, type: 'service_restriction', title: '🚧 Service Restriction Active', body: `${title}: ${reason.substring(0, 100)}`, data: { restrictionId: ref.id }, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
+      q.limit(2000).get().then(snap => {
+        // [SCALE-11] capped read + 450-op write batches (was one add() per doc)
+        const _ids = snap.docs.map(d => d.id);
+        const _mk = (uid) => { const p = { userId: uid, type: 'service_restriction', title: '🚧 Service Restriction Active', body: `${title}: ${reason.substring(0, 100)}`, data: { restrictionId: ref.id }, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() }; return p; };
+        (async () => {
+          for (let i = 0; i < _ids.length; i += 450) {
+            const b = db.batch();
+            _ids.slice(i, i + 450).forEach(uid => b.set(db.collection('notifications').doc(), _mk(uid)));
+            await b.commit();
+          }
+        })();
       });
     });
     showToast('✅ Restriction activated. Affected users notified.', 'success');
@@ -4090,8 +4104,17 @@ function resumeRestriction(id) {
       let q = db.collection(coll);
       if (r.districts && r.districts.length > 0) q = q.where('district', 'in', r.districts.slice(0, 10));
       else if (r.states && r.states.length > 0) q = q.where('state', '==', r.states[0]);
-      q.get().then(snap => {
-        snap.docs.forEach(d => db.collection('notifications').add({ userId: d.id, type: 'service_resumed', title: '✅ Services Restored', body: `Services in ${areaLabel} have been restored. Thank you for your patience.`, data: { restrictionId: id }, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
+      q.limit(2000).get().then(snap => {
+        // [SCALE-11] capped read + 450-op write batches (was one add() per doc)
+        const _ids = snap.docs.map(d => d.id);
+        const _mk = (uid) => { const p = { userId: uid, type: 'service_resumed', title: '✅ Services Restored', body: `Services in ${areaLabel} have been restored. Thank you for your patience.`, data: { restrictionId: id }, read: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() }; return p; };
+        (async () => {
+          for (let i = 0; i < _ids.length; i += 450) {
+            const b = db.batch();
+            _ids.slice(i, i + 450).forEach(uid => b.set(db.collection('notifications').doc(), _mk(uid)));
+            await b.commit();
+          }
+        })();
       });
     });
     showToast('✅ Services resumed. Users notified.', 'success');
