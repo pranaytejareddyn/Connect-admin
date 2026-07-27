@@ -180,6 +180,26 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .stat-trend-period { color: var(--text-mute); font-weight: 500; margin-left: 3px; font-size: 11px; }
 .stat-spark { width: 70px; height: 24px; flex-shrink: 0; display: block; }
 .stat-icon-svg { display: flex; }
+/* ═══ Secondary KPI strip — supporting figures under the cards ═══
+   Spans the full stats-grid so it reads as one band rather than a stray card,
+   and wraps to as many rows as it needs on narrow screens. */
+.kpi-strip {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);
+  padding: 14px 20px; margin-top: -4px;
+}
+.kpi-strip-item { display: flex; align-items: baseline; gap: 8px; }
+.kpi-strip-k {
+  font-size: 11px; font-weight: 600; color: var(--text-sec);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.kpi-strip-v { font-size: 17px; font-weight: 800; color: var(--text); letter-spacing: -0.3px; }
+@media (max-width: 768px) {
+  .kpi-strip { gap: 8px 18px; padding: 12px 14px; }
+  .kpi-strip-v { font-size: 15px; }
+}
 .stat-icon-svg svg { width: 18px; height: 18px; display: block; }
 @media (max-width: 768px) { .stat-spark { width: 52px; height: 20px; } .stat-attention-dot { right: 50px; top: 14px; } }
 .card { background: var(--surface); border-radius: var(--radius-lg); border: 1px solid var(--border); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 20px; }
@@ -540,6 +560,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
           <div><div class="page-title">User Management</div><div class="page-sub">Manage all platform users — Pan-India</div></div>
           <div><button class="btn btn-ghost" onclick="exportCSV('users')">📥 Export CSV</button></div>
         </div>
+        <div class="stats-grid" id="users-stats"></div>
         <div class="card">
           <div class="filter-bar" id="user-filters">
             <button class="filter-btn active" data-filter="all">All</button>
@@ -571,6 +592,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
           <div><div class="page-title">Helper Management</div><div class="page-sub">Manage all helpers — Pan-India</div></div>
           <div><button class="btn btn-ghost" onclick="exportCSV('helpers')">📥 Export CSV</button></div>
         </div>
+        <div class="stats-grid" id="helpers-stats"></div>
         <div class="card">
           <div class="filter-bar" id="helper-filters">
             <button class="filter-btn active" data-filter="all">All</button>
@@ -1928,8 +1950,87 @@ function renderRecentActivity() {
 </script>
 
 <script>
+// ── Live stat headers for User / Helper Management ─────────────────────────
+//
+// Both pages listed accounts with no sense of scale or momentum — an admin
+// could not tell how many users existed, how many joined today, or how big the
+// verification queue was without counting rows by hand.
+//
+// Built on the existing KPI toolkit (kpiRenderCard + 7-day sparkline +
+// week-over-week trend) so these match the Overview strip exactly rather than
+// introducing a second visual language. Both re-render from the same live
+// onSnapshot arrays as the tables, so the numbers move in real time.
+//
+// `attention` flags a card that needs someone to act (pending verifications,
+// blocked accounts); `invertedTrend` means "up is bad" — a rising suspension
+// count should read red, not green.
+function renderUsersStats() {
+  const el = document.getElementById('users-stats');
+  if (!el) return;
+  const active = users.filter(u => (u.status || 'active') === 'active' && !u.isBlocked && !u.isSuspended);
+  const verified = users.filter(u => u.isVerified);
+  const flagged = users.filter(u => u.isBlocked || u.isSuspended);
+  const onboarding = users.filter(u => !u.onboardingCompleted);
+  el.innerHTML = [
+    kpiRenderCard({ label: 'Total Users', value: users.length, items: users, icon: 'users', tone: 'primary' }),
+    kpiRenderCard({ label: 'Active', value: active.length, items: active, icon: 'check', tone: 'success' }),
+    kpiRenderCard({ label: 'Verified', value: verified.length, items: verified, icon: 'shield', tone: 'info' }),
+    kpiRenderCard({ label: 'Incomplete Signup', value: onboarding.length, items: onboarding, icon: 'clock', tone: 'warning', invertedTrend: true }),
+    kpiRenderCard({ label: 'Blocked / Suspended', value: flagged.length, items: flagged, icon: 'alert', tone: 'danger', attention: true, invertedTrend: true }),
+  ].join('') + kpiSecondaryRow([
+    { k: 'Joined today', v: kpiCountSince(users, 0) },
+    { k: 'This week', v: kpiCountSince(users, 6) },
+    { k: 'This month', v: kpiCountSince(users, 29) },
+    { k: 'States covered', v: new Set(users.map(u => u.state).filter(Boolean)).size },
+    { k: 'Districts covered', v: new Set(users.map(u => u.district).filter(Boolean)).size },
+  ]);
+}
+
+function renderHelpersStats() {
+  const el = document.getElementById('helpers-stats');
+  if (!el) return;
+  const pending = helpers.filter(h => (h.status || 'pending') === 'pending');
+  const approved = helpers.filter(h => h.status === 'approved' && !h.isBlocked && !h.isSuspended);
+  const flagged = helpers.filter(h => h.isBlocked || h.isSuspended);
+  const rated = helpers.filter(h => (h.totalRatings || 0) > 0);
+  const avg = rated.length
+    ? (rated.reduce((s, h) => s + (Number(h.rating) || 0), 0) / rated.length).toFixed(1)
+    : '—';
+  el.innerHTML = [
+    kpiRenderCard({ label: 'Total Helpers', value: helpers.length, items: helpers, icon: 'shield', tone: 'primary' }),
+    kpiRenderCard({ label: 'Approved', value: approved.length, items: approved, icon: 'check', tone: 'success' }),
+    // The queue an admin actually has to work — surfaced, not buried in a tab.
+    kpiRenderCard({ label: 'Pending Verification', value: pending.length, items: pending, icon: 'clock', tone: 'warning', attention: true, invertedTrend: true }),
+    kpiRenderCard({ label: 'Blocked / Suspended', value: flagged.length, items: flagged, icon: 'alert', tone: 'danger', attention: true, invertedTrend: true }),
+  ].join('') + kpiSecondaryRow([
+    { k: 'Joined today', v: kpiCountSince(helpers, 0) },
+    { k: 'This week', v: kpiCountSince(helpers, 6) },
+    { k: 'Avg rating', v: avg === '—' ? '—' : `⭐ ${avg}` },
+    { k: 'Rated helpers', v: rated.length },
+    { k: 'Districts covered', v: new Set(helpers.map(h => h.district).filter(Boolean)).size },
+  ]);
+}
+
+// Count records created within the last `daysBack` days (0 = today only).
+function kpiCountSince(items, daysBack) {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - daysBack);
+  let n = 0;
+  for (const it of items) { const d = kpiAsDate(it.createdAt); if (d && d >= start) n++; }
+  return n;
+}
+
+// A compact strip of supporting figures under the cards — the numbers that are
+// useful at a glance but don't each deserve a full card.
+function kpiSecondaryRow(pairs) {
+  return `<div class="kpi-strip">${pairs.map(p =>
+    `<div class="kpi-strip-item"><span class="kpi-strip-k">${p.k}</span><span class="kpi-strip-v">${p.v}</span></div>`
+  ).join('')}</div>`;
+}
+
 // ── Users (Pan-India) ──
 function renderUsers() {
+  renderUsersStats();
   let f = users;
   if (userFilter === 'active') f = f.filter(u => (u.status||'active') === 'active' && !u.isBlocked && !u.isSuspended);
   else if (userFilter === 'verified') f = f.filter(u => u.isVerified);
@@ -2349,6 +2450,7 @@ function bulkUserAction(action) {
 
 // ── Helpers (Pan-India) ──
 function renderHelpers() {
+  renderHelpersStats();
   let f = helpers;
   if (helperFilter === 'pending') f = f.filter(h => (h.status||'pending') === 'pending');
   else if (helperFilter === 'approved') f = f.filter(h => h.status === 'approved' && !h.isBlocked && !h.isSuspended);
