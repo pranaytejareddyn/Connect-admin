@@ -203,6 +203,15 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .stat-trend-period { color: var(--text-mute); font-weight: 500; margin-left: 3px; font-size: 11px; }
 .stat-spark { width: 70px; height: 24px; flex-shrink: 0; display: block; }
 .stat-icon-svg { display: flex; }
+/* ═══ Per-staff read/unread indicators ═══ */
+.unread-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--primary); margin-right:7px; vertical-align:middle; box-shadow:0 0 0 2px var(--surface), 0 0 0 4px rgba(37,99,235,0.18); }
+tr.row-unread, .card.row-unread { background:var(--primary-light); }
+tr.row-unread td:first-child, .card.row-unread { box-shadow: inset 3px 0 0 var(--primary); }
+.unread-controls { display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+.unread-pill { font-size:12.5px; font-weight:600; color:var(--text-sec); background:var(--surface); border:1px solid var(--border); border-radius:999px; padding:5px 12px; cursor:pointer; transition:all .15s; }
+.unread-pill:hover { border-color:var(--border-strong); color:var(--text); }
+.unread-pill.active { background:var(--primary); border-color:var(--primary); color:#fff; }
+.unread-pill b { margin-left:2px; }
 /* ═══ Secondary KPI strip — supporting figures under the cards ═══
    Spans the full stats-grid so it reads as one band rather than a stray card,
    and wraps to as many rows as it needs on narrow screens. */
@@ -1780,6 +1789,238 @@ function tearDownListeners() {
   unsubscribers = [];
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PER-STAFF READ / UNREAD TRACKING
+//
+// Each admin/employee has their OWN read state — opening an item marks it read
+// for that person only, never globally. State lives in Firestore
+// (adminReads/{email}), so it survives refresh, logout/login and syncs live
+// across devices. Workflow status (pending/resolved/…) is completely separate:
+// this only tracks "have I personally looked at this record yet".
+//
+// An item is UNREAD for me when I have no read entry for it, OR it has changed
+// since I last opened it (activity timestamp newer than my read time) — so a
+// report that gets a new reply, or a resubmitted appeal, correctly re-surfaces.
+//
+// Categories are keyed by a short slug; each maps to its data array, the field
+// that carries "last activity", and the sidebar badge.
+let myReads = {};                 // { category: { itemId: readAtMillis } }
+let _readsUnsub = null;
+const readsEmailKey = () => (currentAdmin.email || '').toLowerCase();
+
+const READ_CATEGORIES = {
+  reports:      { badge: 'badge-reports',      arr: () => reports,          activity: r => msOf(r.updatedAt || r.repliedAt || r.createdAt) },
+  verification: { badge: 'badge-verification', arr: () => helpers.filter(h => h.verificationStatus === 'pending' || (h.verificationRequest && h.verificationRequest.status === 'pending')),
+                                               activity: h => msOf((h.verificationRequest && h.verificationRequest.submittedAt) || h.updatedAt || h.createdAt) },
+  alerts:       { badge: 'badge-alerts',       arr: () => alerts,           activity: a => msOf(a.updatedAt || a.createdAt) },
+  work:         { badge: 'badge-work',         arr: () => workPostsData,    activity: w => msOf(w.updatedAt || w.createdAt) },
+  appeals:      { badge: 'badge-appeals',      arr: () => appeals,          activity: a => msOf(a.repliedAt || a.updatedAt || a.createdAt) },
+  safety:       { badge: 'badge-safety',       arr: () => modIncidents,     activity: i => msOf(i.updatedAt || i.createdAt) },
+  issues:       { badge: 'badge-issues',       arr: () => trackedIssues,    activity: i => msOf(i.lastSeen || i.updatedAt) },
+  agreements:   { badge: 'badge-agreements',   arr: () => agreements,       activity: a => msOf(a.updatedAt || a.createdAt) },
+};
+
+// Subscribe to MY read-state doc. Called on login; torn down on logout.
+function subscribeMyReads() {
+  if (_readsUnsub) { try { _readsUnsub(); } catch {} _readsUnsub = null; }
+  const email = readsEmailKey();
+  if (!email) return;
+  _readsUnsub = db.collection('adminReads').doc(email).onSnapshot(snap => {
+    myReads = (snap.exists && snap.data().reads) || {};
+    // Re-render whatever page is open + refresh every category badge.
+    try { refreshAllUnreadBadges(); } catch {}
+    try { rerenderActivePage(); } catch {}
+  }, err => console.log('adminReads listener error:', err));
+}
+
+function isUnread(cat, item) {
+  if (!item || !item.id) return false;
+  const readAt = (myReads[cat] || {})[item.id];
+  if (!readAt) return true;                       // never opened
+  const c = READ_CATEGORIES[cat];
+  const act = c && c.activity ? c.activity(item) : 0;
+  return act > readAt;                            // changed since I last looked
+}
+
+function catUnreadCount(cat) {
+  const c = READ_CATEGORIES[cat];
+  if (!c) return 0;
+  try { return c.arr().filter(it => isUnread(cat, it)).length; } catch { return 0; }
+}
+
+// A small blue dot for unread rows. Empty string when read, so it collapses.
+function unreadDot(cat, item) {
+  return isUnread(cat, item)
+    ? '<span class="unread-dot" title="New — not opened by you"></span>'
+    : '';
+}
+
+async function markRead(cat, id, opts) {
+  const email = readsEmailKey();
+  if (!email || !id) return;
+  try {
+    await db.collection('adminReads').doc(email).set({
+      email,
+      reads: { [cat]: { [id]: Date.now() } },
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (e) { console.log('markRead failed:', e); }
+}
+
+async function markUnread(cat, id) {
+  const email = readsEmailKey();
+  if (!email || !id) return;
+  try {
+    await db.collection('adminReads').doc(email).set({
+      reads: { [cat]: { [id]: firebase.firestore.FieldValue.delete() } },
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (e) { console.log('markUnread failed:', e); }
+}
+
+// Mark every currently-loaded item in a category as read (bulk "mark all read").
+async function markAllRead(cat) {
+  const c = READ_CATEGORIES[cat];
+  if (!c) return;
+  const email = readsEmailKey();
+  if (!email) return;
+  const now = Date.now();
+  const map = {};
+  try { c.arr().forEach(it => { if (it.id) map[it.id] = now; }); } catch {}
+  try {
+    await db.collection('adminReads').doc(email).set({
+      email, reads: { [cat]: map }, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    showToast('Marked all as read', 'success');
+  } catch (e) { showToast('Could not mark all read', 'error'); }
+}
+
+// Sort helper: unread first, then the caller's existing comparator.
+function unreadFirst(cat, arr, thenCmp) {
+  return arr.slice().sort((a, b) => {
+    const ua = isUnread(cat, a) ? 0 : 1, ub = isUnread(cat, b) ? 0 : 1;
+    if (ua !== ub) return ua - ub;
+    return thenCmp ? thenCmp(a, b) : 0;
+  });
+}
+
+// Per-page "Unread only" toggle state.
+let unreadFilter = {};
+function toggleUnreadFilter(cat) {
+  unreadFilter[cat] = !unreadFilter[cat];
+  rerenderActivePage();
+}
+function applyUnreadFilter(cat, arr) {
+  return unreadFilter[cat] ? arr.filter(it => isUnread(cat, it)) : arr;
+}
+
+// Compact "Unread (n) · All · Mark all read" control for a category page header.
+function unreadControls(cat) {
+  const n = catUnreadCount(cat);
+  const on = !!unreadFilter[cat];
+  return `<div class="unread-controls">
+    <button class="unread-pill ${on ? 'active' : ''}" onclick="toggleUnreadFilter('${cat}')">
+      ${on ? '● Unread only' : 'Unread'}${n ? ` <b>${n}</b>` : ''}
+    </button>
+    ${on ? `<button class="unread-pill" onclick="toggleUnreadFilter('${cat}')">Show all</button>` : ''}
+    ${n ? `<button class="unread-pill" onclick="markAllRead('${cat}')">Mark all read</button>` : ''}
+  </div>`;
+}
+
+function isUnreadById(cat, id) {
+  const c = READ_CATEGORIES[cat];
+  if (!c) return false;
+  let item = null;
+  try { item = c.arr().find(x => x.id === id); } catch {}
+  return item ? isUnread(cat, item) : false;
+}
+
+// Generic decorator: after a category table renders, mark unread rows (dot +
+// highlight) and, when the "Unread only" filter is on, hide read rows — all by
+// reading the existing onclick id in each row, so no row template is touched.
+// Also prepends the Unread/All/Mark-all controls above the table.
+function decorateUnread(containerId, cat, viewFn) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  // Idempotent: the observer may fire more than once per render.
+  if (!container.querySelector('.unread-controls')) {
+    container.insertAdjacentHTML('afterbegin', unreadControls(cat));
+  }
+  const rows = container.querySelectorAll('table tbody tr');
+  const filterOn = !!unreadFilter[cat];
+  let shown = 0;
+  rows.forEach(tr => {
+    const el = tr.querySelector(`[onclick^="${viewFn}("]`);
+    if (!el) return;
+    const m = el.getAttribute('onclick').match(/\('([^']+)'/);
+    if (!m) return;
+    const unread = isUnreadById(cat, m[1]);
+    if (unread) {
+      tr.classList.add('row-unread');
+      const td = tr.querySelector('td');
+      if (td && !td.querySelector('.unread-dot')) td.insertAdjacentHTML('afterbegin', '<span class="unread-dot" title="New — not opened by you"></span>');
+      shown++;
+    } else if (filterOn) {
+      tr.style.display = 'none';
+    } else { shown++; }
+  });
+  if (filterOn && shown === 0) {
+    const t = container.querySelector('table');
+    if (t) t.insertAdjacentHTML('afterend', '<div class="table-empty" style="padding:20px;text-align:center;color:var(--text-mute)">You have read everything here 🎉</div>');
+  }
+}
+
+function refreshAllUnreadBadges() {
+  Object.keys(READ_CATEGORIES).forEach(cat => {
+    const c = READ_CATEGORIES[cat];
+    try { setBadge(c.badge, catUnreadCount(cat)); } catch {}
+  });
+}
+
+// Auto-decorate each category table whenever it re-renders — no per-render
+// code needed. Disconnect while decorating so our own dot/control insertions
+// don't re-trigger the observer (no loops).
+const UNREAD_OBSERVE = [
+  ['reports-table', 'reports', 'viewReport'],
+  ['verification-table', 'verification', 'viewHelper'],
+  ['alerts-table', 'alerts', 'viewAlert'],
+  ['work-table', 'work', 'viewWorkPost'],
+  ['appeals-table', 'appeals', 'viewAppeal'],
+  ['safety-table', 'safety', 'openSafetyIncident'],
+  ['issues-table', 'issues', 'openIssueDetail'],
+  ['agreements-table', 'agreements', 'viewAgreement'],
+];
+let _unreadObserversInit = false;
+function initUnreadObservers() {
+  if (_unreadObserversInit) return;
+  _unreadObserversInit = true;
+  UNREAD_OBSERVE.forEach(([cid, cat, fn]) => {
+    const el = document.getElementById(cid);
+    if (!el) return;
+    const obs = new MutationObserver(() => {
+      obs.disconnect();
+      try { decorateUnread(cid, cat, fn); } catch {}
+      obs.observe(el, { childList: true, subtree: true });
+    });
+    obs.observe(el, { childList: true, subtree: true });
+  });
+}
+
+// Re-run the render fn for whichever page is currently visible.
+function rerenderActivePage() {
+  const map = {
+    'page-reports': 'renderReports', 'page-verification': 'renderVerification',
+    'page-alerts': 'renderAlerts', 'page-work': 'renderWorkPosts',
+    'page-appeals': 'renderAppeals', 'page-safety': 'renderSafety',
+    'page-issues': 'renderIssues', 'page-agreements': 'renderAgreements',
+  };
+  for (const [pageId, fn] of Object.entries(map)) {
+    if (document.getElementById(pageId)?.classList.contains('active') && typeof window[fn] === 'function') {
+      try { window[fn](); } catch {}
+    }
+  }
+}
+
 // Charts (used by updateOverview) are expensive to re-render. Only
 // update Overview when the user is actually looking at it. Badges and
 // per-page renders happen on every snapshot regardless.
@@ -1791,6 +2032,8 @@ function updateOverviewMaybe() {
 
 function loadAll() {
   tearDownListeners();
+  subscribeMyReads();        // per-staff read state (live)
+  initUnreadObservers();     // auto-decorate category tables on render
 
   // ── users ──
   unsubscribers.push(db.collection('users').orderBy('createdAt','desc').limit(1500).onSnapshot(snap => {
@@ -1806,7 +2049,7 @@ function loadAll() {
     helpers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
     setBadge('badge-helpers', helpers.filter(h => (h.status||'pending') === 'pending').length);
-    setBadge('badge-verification', helpers.filter(h => h.verificationStatus === 'pending' || h.verificationRequest?.status === 'pending').length);
+    setBadge('badge-verification', catUnreadCount('verification'));
     if (!helperState) populateDistrictsForFilter('helper', '');
     renderHelpers();
     renderVerification();
@@ -1817,7 +2060,7 @@ function loadAll() {
   unsubscribers.push(db.collection('emergencyAlerts').orderBy('createdAt','desc').limit(500).onSnapshot(snap => {
     alerts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
-    setBadge('badge-alerts', alerts.filter(a => (a.status||'pending')==='pending' || a.status==='resubmitted').length);
+    setBadge('badge-alerts', catUnreadCount('alerts'));
     renderAlerts();
     updateOverviewMaybe();
   }, err => console.log('alerts listener error:', err)));
@@ -1826,7 +2069,7 @@ function loadAll() {
   unsubscribers.push(db.collection('reports').orderBy('createdAt','desc').limit(500).onSnapshot(snap => {
     reports = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
-    setBadge('badge-reports', reports.filter(r => (r.status||'open')==='open').length);
+    setBadge('badge-reports', catUnreadCount('reports'));
     renderReports();
     updateOverviewMaybe();
   }, err => console.log('reports listener error:', err)));
@@ -1856,7 +2099,7 @@ function loadAll() {
   unsubscribers.push(db.collection('appeals').orderBy('createdAt','desc').limit(500).onSnapshot(snap => {
     appeals = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
-    setBadge('badge-appeals', appeals.filter(a => a.status === 'submitted').length);
+    setBadge('badge-appeals', catUnreadCount('appeals'));
     renderAppeals();
   }, err => console.log('appeals listener error:', err)));
 
@@ -1864,7 +2107,7 @@ function loadAll() {
   unsubscribers.push(db.collection('agreements').orderBy('createdAt','desc').limit(1000).onSnapshot(snap => {
     agreements = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
-    setBadge('badge-agreements', agreements.filter(a => a.status === 'disputed').length);
+    setBadge('badge-agreements', catUnreadCount('agreements'));
     renderAgreements();
   }, err => console.log('agreements listener error:', err)));
 
@@ -1872,7 +2115,7 @@ function loadAll() {
   unsubscribers.push(db.collection('workPosts').orderBy('createdAt','desc').limit(1000).onSnapshot(snap => {
     workPostsData = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => msOf(b.createdAt) - msOf(a.createdAt));
-    setBadge('badge-work', workPostsData.filter(w => (w.status || '') === 'active').length);
+    setBadge('badge-work', catUnreadCount('work'));
     renderWorkPosts();
   }, err => console.log('workPosts listener error:', err)));
 
@@ -2983,6 +3226,7 @@ async function hydrateHelperKyc(h) {
 }
 
 function viewHelper(id) {
+  try { markRead('verification', id); } catch {}
   const h = helpers.find(x => x.id === id); if (!h) return;
 
   // Load the private KYC doc on first open, then re-render with the URLs.
@@ -3325,6 +3569,7 @@ function renderAlerts() {
 }
 
 function viewAlert(id) {
+  try { markRead('alerts', id); } catch {}
   const a = alerts.find(x => x.id === id); if (!a) return;
   let extra = '';
   if (a.missingPerson) {
@@ -3473,6 +3718,7 @@ function renderReports() {
 }
 
 function viewReport(id) {
+  try { markRead('reports', id); } catch {}
   const r = reports.find(x => x.id === id); if (!r) return;
   const statuses = ['open','in_review','waiting_for_response','resolved','closed'];
   const priorities = ['low','medium','high','critical'];
@@ -3728,6 +3974,7 @@ function renderAppeals() {
 }
 
 function viewAppeal(id) {
+  try { markRead('appeals', id); } catch {}
   const a = appeals.find(x => x.id === id); if (!a) return;
   const isPending = a.status === 'submitted' || a.status === 'under_review';
   showModal(
@@ -3882,6 +4129,7 @@ function renderWorkPosts() {
 }
 
 async function viewWorkPost(id) {
+  try { markRead('work', id); } catch {}
   const w = workPostsData.find(x => x.id === id); if (!w) return;
   showModal(
     `<div class="modal-header"><div class="modal-title">💼 ${w.title || 'Work Post'}</div><button class="modal-close" onclick="closeModal()">×</button></div>
@@ -3932,6 +4180,7 @@ function removeWorkPost(id) {
 }
 
 function viewAgreement(id) {
+  try { markRead('agreements', id); } catch {}
   const a = agreements.find(x => x.id === id); if (!a) return;
   const remaining = a.advancePaid && a.advanceAmount ? Math.max(0, parseFloat(a.amount || '0') - parseFloat(a.advanceAmount || '0')) : parseFloat(a.amount || '0');
   const versionHistoryHtml = a.versionHistory && a.versionHistory.length > 0 ?
@@ -6187,7 +6436,7 @@ function renderIssues() {
 
   // Badge: critical open + my unread inbox pings.
   var unread = _myUnreadInbox().length;
-  setBadge('badge-issues', critical.length + unread);
+  setBadge('badge-issues', catUnreadCount('issues'));
 
   var meta = document.getElementById('issues-sync-meta');
   if (meta && _issueMetaCache && _issueMetaCache.lastSyncAt) {
@@ -6237,6 +6486,7 @@ function _issueEmployees() {
 
 // ── Detail modal ──────────────────────────────────────────────────────────
 function openIssueDetail(id) {
+  try { markRead('issues', id); } catch {}
   var i = trackedIssues.find(function (x) { return x.id === id; });
   if (!i) { showToast('Issue not found (it may have been removed)', 'error'); return; }
   _issueEmployees().then(function (emps) {
@@ -6548,11 +6798,12 @@ function renderSafety() {
           '</tr>';
         }).join('') + '</tbody></table>';
   }
-  setBadge('badge-safety', unresolved.filter(function (i) { return i.severity === 'critical' || i.severity === 'high'; }).length);
+  setBadge('badge-safety', catUnreadCount('safety'));
 }
 
 // ── Incident detail + actions ─────────────────────────────────────────────
 function openSafetyIncident(id) {
+  try { markRead('safety', id); } catch {}
   var i = modIncidents.find(function (x) { return x.id === id; });
   if (!i) { showToast('Incident not found', 'error'); return; }
   _issueEmployees().then(function (emps) {
