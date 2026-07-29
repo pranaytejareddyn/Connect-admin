@@ -2350,6 +2350,135 @@ function openReportedParty(id, role) {
   }, 180);
 }
 
+// ── CTI moderation ─────────────────────────────────────────────────────────
+// Admin adjusts a CTI ONLY through the adjustCTI Cloud Function, which is
+// permission-gated server-side and writes an immutable audit record. The UI
+// here just collects the decision and shows the current → adjustment → result
+// preview before confirmation. It never writes CTI directly.
+const CTI_REASONS = [
+  'Confirmed complaint — misconduct', 'Confirmed complaint — safety/policy violation',
+  'Confirmed complaint — fraud/scam', 'No-show / repeated cancellations',
+  'Positive: exceptional service', 'Restoration after appeal', 'Correction of prior error', 'Other',
+];
+
+function ctiLiveDoc(role, id) {
+  const arr = role === 'user' ? users : helpers;
+  return arr.find(x => x.id === id) || null;
+}
+
+function openCTIAdjust(role, id, name, reportId) {
+  const d = ctiLiveDoc(role, id);
+  const current = (d && typeof d.communityTrustIndex === 'number') ? d.communityTrustIndex : 49;
+  const reasons = CTI_REASONS.map(r => `<option value="${r}">${r}</option>`).join('');
+  showModal(
+    `<div class="modal-header"><div class="modal-title">🎯 Adjust CTI — ${name || id}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+     <div class="modal-body">
+       ${mf('Account', `${role === 'user' ? '👥 User' : '🛡️ Helper'} · <code>${id}</code>`)}
+       ${mf('Current CTI', `<strong id="cti-cur" style="font-size:18px">${current}</strong> / 100`)}
+       <div class="modal-field"><div class="modal-label">Action</div>
+         <select id="cti-action" class="form-select" onchange="ctiPreview(${current})">
+           <option value="no_change">No change</option>
+           <option value="decrease">Decrease</option>
+           <option value="increase">Increase</option>
+         </select></div>
+       <div class="modal-field" id="cti-amt-wrap" style="display:none"><div class="modal-label">Amount (1–100)</div>
+         <input type="number" id="cti-amount" class="form-input" min="1" max="100" value="5" oninput="ctiPreview(${current})"/></div>
+       <div class="modal-field"><div class="modal-label">Reason / category</div>
+         <select id="cti-reason" class="form-select">${reasons}</select></div>
+       <div class="modal-field"><div class="modal-label">Internal moderation note (required)</div>
+         <textarea id="cti-note" class="form-textarea" placeholder="What did the investigation find? Why this adjustment?"></textarea></div>
+       <div style="background:var(--bg-alt);border-radius:10px;padding:14px;text-align:center;font-size:20px;font-weight:800;margin-top:8px">
+         <span id="cti-prev-cur">${current}</span>
+         <span style="color:var(--text-mute)"> → </span>
+         <span id="cti-prev-delta" style="color:var(--text-mute)">0</span>
+         <span style="color:var(--text-mute)"> → </span>
+         <span id="cti-prev-res" style="color:var(--primary)">${current}</span>
+       </div>
+     </div>
+     <div class="modal-footer">
+       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-primary" id="cti-apply" onclick="applyCTIAdjust('${role}','${id}','${reportId || ''}',${current})">Apply adjustment</button>
+     </div>`
+  );
+}
+
+function ctiPreview(current) {
+  const action = document.getElementById('cti-action').value;
+  const amtWrap = document.getElementById('cti-amt-wrap');
+  amtWrap.style.display = action === 'no_change' ? 'none' : 'block';
+  let amt = action === 'no_change' ? 0 : Math.round(Number(document.getElementById('cti-amount').value) || 0);
+  amt = Math.max(0, Math.min(100, amt));
+  const delta = action === 'increase' ? amt : action === 'decrease' ? -amt : 0;
+  const result = Math.max(0, Math.min(100, current + delta));
+  document.getElementById('cti-prev-delta').textContent = (delta >= 0 ? '+' : '') + delta;
+  document.getElementById('cti-prev-delta').style.color = delta > 0 ? 'var(--success)' : delta < 0 ? 'var(--danger)' : 'var(--text-mute)';
+  document.getElementById('cti-prev-res').textContent = result;
+}
+
+async function applyCTIAdjust(role, id, reportId, current) {
+  const action = document.getElementById('cti-action').value;
+  const amount = action === 'no_change' ? 0 : Math.round(Number(document.getElementById('cti-amount').value) || 0);
+  const reasonCategory = document.getElementById('cti-reason').value;
+  const note = (document.getElementById('cti-note').value || '').trim();
+  if (action !== 'no_change' && (!(amount >= 1 && amount <= 100))) { showToast('Enter an amount between 1 and 100', 'error'); return; }
+  if (!note) { showToast('An internal note is required', 'error'); return; }
+  const delta = action === 'increase' ? amount : action === 'decrease' ? -amount : 0;
+  if (!confirm(`Apply CTI ${action} for this ${role}?\n\n${current} → ${delta >= 0 ? '+' : ''}${delta} → ${Math.max(0, Math.min(100, current + delta))}\n\nThis is recorded permanently.`)) return;
+  const btn = document.getElementById('cti-apply'); if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+  try {
+    const res = await firebase.app().functions('us-central1').httpsCallable('adjustCTI')({
+      targetType: role, targetId: id, action, amount, reasonCategory, note, reportId: reportId || null,
+    });
+    const d = res.data || {};
+    showToast(`✅ CTI: ${d.previousCTI} → ${d.resultingCTI}`, 'success');
+    logAudit('CTI adjustment', `${role} ${id}: ${d.previousCTI} → ${d.resultingCTI} [${reasonCategory}]`, 'CTI');
+    closeModal();
+  } catch (e) {
+    showToast('CTI adjustment failed: ' + (e.message || e), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply adjustment'; }
+  }
+}
+
+async function openCTIHistory(role, id, name) {
+  showModal(`<div class="modal-header"><div class="modal-title">🕑 CTI History — ${name || id}</div><button class="modal-close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="table-empty">Loading…</div></div>`);
+  let rows = [];
+  try {
+    const snap = await db.collection('ctiAdjustments').where('targetId', '==', id).limit(200).get();
+    rows = snap.docs.map(d => d.data()).sort((a, b) => (b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0) - (a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0));
+  } catch (e) { showToast('Could not load history: ' + (e.message || e), 'error'); }
+  const body = rows.length === 0
+    ? '<div class="table-empty"><div class="table-empty-emoji">📭</div><div class="table-empty-title">No CTI adjustments yet</div></div>'
+    : rows.map(a => {
+        const when = a.createdAt && a.createdAt.toDate ? fDate(a.createdAt) : '—';
+        const tag = a.isReversal ? '<span class="badge badge-info">Reversal</span>' : a.reversed ? '<span class="badge badge-medium">Reversed</span>' : '';
+        const canReverse = !a.isReversal && !a.reversed;
+        return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <strong>${a.previousCTI} → ${a.delta >= 0 ? '+' : ''}${a.delta} → ${a.resultingCTI}</strong> ${tag}
+          </div>
+          <div style="font-size:12.5px;color:var(--text-sec);margin-top:4px">${a.reasonCategory || '—'}</div>
+          <div style="font-size:12px;color:var(--text-mute);margin-top:2px">${(a.note || '').replace(/</g,'&lt;')}</div>
+          <div style="font-size:11px;color:var(--text-mute);margin-top:6px">${a.adminEmail || '—'} · ${when}${a.reportId ? ' · report ' + a.reportId : ''}</div>
+          ${canReverse ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="reverseCTI('${role}','${id}','${a.id}')">↩ Reverse this</button>` : ''}
+        </div>`;
+      }).join('');
+  showModal(`<div class="modal-header"><div class="modal-title">🕑 CTI History — ${name || id}</div><button class="modal-close" onclick="closeModal()">×</button></div><div class="modal-body">${body}</div>`);
+}
+
+async function reverseCTI(role, id, adjustmentId) {
+  const note = prompt('Reason for reversing this adjustment (recorded):', 'Adjustment was incorrect');
+  if (note === null) return;
+  try {
+    const res = await firebase.app().functions('us-central1').httpsCallable('adjustCTI')({
+      targetType: role, targetId: id, reversalOf: adjustmentId, reasonCategory: 'Correction of prior error', note: note || 'Reversal',
+    });
+    const d = res.data || {};
+    showToast(`✅ Reversed — CTI now ${d.resultingCTI}`, 'success');
+    logAudit('CTI reversal', `${role} ${id}: reversed ${adjustmentId} → ${d.resultingCTI}`, 'CTI');
+    openCTIHistory(role, id, '');
+  } catch (e) { showToast('Reversal failed: ' + (e.message || e), 'error'); }
+}
+
 function viewUser(id) {
   const u = users.find(x => x.id === id); if (!u) return;
   const userAlerts = alerts.filter(a => a.userId === id);
@@ -3028,7 +3157,12 @@ function viewHelper(id) {
       ${mf('Rating', h.rating ? `⭐ ${Number(h.rating).toFixed(1)} (${h.totalRatings || 0} reviews)` : 'No ratings yet')}
       ${mf('Completed Tasks', h.totalRequests || 0)}
       ${mf('Total Earnings', `₹${Number(h.totalEarnings || 0).toLocaleString('en-IN')}`)}
-      ${mf('Community Trust Index', `${h.communityTrustIndex || 50}/100`)}
+      ${mf('Community Trust Index', `<strong style="font-size:16px">${(typeof h.communityTrustIndex === 'number' ? h.communityTrustIndex : 49)}</strong>/100` +
+        (h.ctiBreakdown ? ` <span class="user-meta">(calculated ${h.ctiCalculated != null ? h.ctiCalculated : '—'}${(h.ctiModerationTotal ? ` ${h.ctiModerationTotal > 0 ? '+' : ''}${h.ctiModerationTotal} moderation` : '')})</span>` : ''))}
+      <div class="modal-field" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="openCTIAdjust('helper','${h.id}','${(h.name || '').replace(/'/g, '')}','')">🎯 Adjust CTI</button>
+        <button class="btn btn-ghost btn-sm" onclick="openCTIHistory('helper','${h.id}','${(h.name || '').replace(/'/g, '')}')">🕑 CTI History</button>
+      </div>
       ${mf('Repeat Users', h.repeatUsers || 0)}
       ${h.cancellationRate ? mf('Cancellation Rate', `${Math.round((h.cancellationRate || 0) * 100)}%`) : ''}
 
@@ -3345,11 +3479,22 @@ function viewReport(id) {
       ${mf('Account ID', `<code>${r.reportedUserId}</code>`)}
       ${mf('Phone', r.reportedUserPhone || '—')}
       ${r.reportedUserDistrict ? mf('District', r.reportedUserDistrict) : ''}
-      <div class="modal-field">
+      <div class="modal-field" style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm"
           onclick="openReportedParty('${r.reportedUserId}','${r.reportedUserRole || 'helper'}')">
           🔍 Open this ${r.reportedUserRole === 'user' ? 'user' : 'helper'}
         </button>
+        <button class="btn btn-primary btn-sm"
+          onclick="openCTIAdjust('${r.reportedUserRole || 'helper'}','${r.reportedUserId}','${(r.reportedUserName || '').replace(/'/g, '')}','${id}')">
+          🎯 Adjust CTI
+        </button>
+        <button class="btn btn-ghost btn-sm"
+          onclick="openCTIHistory('${r.reportedUserRole || 'helper'}','${r.reportedUserId}','${(r.reportedUserName || '').replace(/'/g, '')}')">
+          🕑 CTI History
+        </button>
+      </div>
+      <div style="font-size:11px;color:var(--text-mute);margin-top:-4px">
+        A report never changes CTI automatically. Adjust only after reviewing the evidence.
       </div>` : `
       <div class="modal-section-header">🚩 Reported Party</div>
       <div class="modal-field"><span class="user-meta">General report — no specific account was named.</span></div>`}
