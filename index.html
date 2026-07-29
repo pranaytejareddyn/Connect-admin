@@ -2479,6 +2479,30 @@ async function reverseCTI(role, id, adjustmentId) {
   } catch (e) { showToast('Reversal failed: ' + (e.message || e), 'error'); }
 }
 
+// Reverse the appealed CTI adjustment AND resolve the appeal in one step. The
+// reversal itself files a fresh audit record (and notifies the member); we then
+// approve the appeal with a short reply.
+async function reverseCTIFromAppeal(appealId, role, accountId, adjustmentId) {
+  const note = prompt('Reason for reversing (recorded + shown to the member):', 'Appeal upheld — adjustment reversed');
+  if (note === null) return;
+  try {
+    const res = await firebase.app().functions('us-central1').httpsCallable('adjustCTI')({
+      targetType: role, targetId: accountId, reversalOf: adjustmentId, reasonCategory: 'Restoration after appeal', note: note || 'Appeal upheld',
+    });
+    const d = res.data || {};
+    await db.collection('appeals').doc(appealId).update({
+      status: 'approved',
+      adminReply: `Appeal upheld. Your Trust Index has been restored to ${d.resultingCTI}.`,
+      adminAction: 'cti_reversed',
+      repliedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      repliedBy: currentAdmin.email || 'Admin',
+    });
+    showToast(`✅ Appeal upheld — CTI restored to ${d.resultingCTI}`, 'success');
+    logAudit('CTI appeal upheld', `${role} ${accountId}: reversed ${adjustmentId} → ${d.resultingCTI}`, 'CTI');
+    closeModal();
+  } catch (e) { showToast('Reversal failed: ' + (e.message || e), 'error'); }
+}
+
 function viewUser(id) {
   const u = users.find(x => x.id === id); if (!u) return;
   const userAlerts = alerts.filter(a => a.userId === id);
@@ -3712,8 +3736,11 @@ function viewAppeal(id) {
       ${mf('Account', `${a.accountType === 'helper' ? '🛡️ Helper' : '👥 User'}: ${a.accountName || '—'}`)}
       ${mf('Contact', a.accountPhone || '—')}
       ${mf('Account ID', `<code>${a.accountId || '—'}</code>`)}
-      ${mf('Appealing Against', `<span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${a.statusType || '—'}</span>`)}
+      ${mf('Appealing Against', a.statusType === 'cti_adjustment'
+          ? '<span class="badge badge-info">CTI adjustment</span>'
+          : `<span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${a.statusType || '—'}</span>`)}
       ${mf('Original Reason', a.originalReason || '—')}
+      ${a.statusType === 'cti_adjustment' && a.ctiAdjustmentId ? `<div class="modal-field"><button class="btn btn-secondary btn-sm" onclick="openCTIHistory('${a.accountType || 'helper'}','${a.accountId}','${(a.accountName || '').replace(/'/g, '')}')">🕑 View CTI history</button></div>` : ''}
       <div class="modal-section-header">📝 Appeal Submission</div>
       ${mf('Subject', `<strong>${a.subject || '—'}</strong>`)}
       ${mf('Explanation', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${a.explanation || '—'}</div>`)}
@@ -3723,7 +3750,13 @@ function viewAppeal(id) {
       ${isPending ? `<div class="modal-section-header">⚙️ Review Decision</div><div class="modal-field"><div class="modal-label">Reply to Appellant</div><textarea id="appeal-reply" class="form-textarea" placeholder="Explain your decision..."></textarea></div>` : ''}
     </div>
     <div class="modal-footer">
-      ${isPending ? `<button class="btn btn-ghost" onclick="closeModal()">Close</button><button class="btn btn-danger" onclick="decideAppeal('${a.id}','rejected')">❌ Reject Appeal</button><button class="btn btn-success" onclick="decideAppeal('${a.id}','approved')">✅ Approve & Reinstate</button>` : `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`}
+      ${isPending
+        ? `<button class="btn btn-ghost" onclick="closeModal()">Close</button>` +
+          (a.statusType === 'cti_adjustment' && a.ctiAdjustmentId
+            ? `<button class="btn btn-secondary" onclick="reverseCTIFromAppeal('${a.id}','${a.accountType || 'helper'}','${a.accountId}','${a.ctiAdjustmentId}')">↩ Reverse CTI</button>`
+            : '') +
+          `<button class="btn btn-danger" onclick="decideAppeal('${a.id}','rejected')">❌ Reject Appeal</button><button class="btn btn-success" onclick="decideAppeal('${a.id}','approved')">✅ Approve${a.statusType === 'cti_adjustment' ? '' : ' & Reinstate'}</button>`
+        : `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`}
     </div>`
   );
 }
