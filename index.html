@@ -1784,6 +1784,62 @@ function msOf(ts) {
   return isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
+// ── [KYC-RET] Verification-document retention timer ─────────────────────────
+// Shows, right at the identity/residency-proof section, how long until the
+// original documents auto-delete. The clock is anchored to the APPROVAL /
+// verification moment (helper: verificationRequest.reviewedAt on approve;
+// user: idProof.verifiedAt when marked verified) — the same anchor the
+// kycRetentionSweep Cloud Function uses to actually delete them 24h later
+// (90 days for a rejected helper). This is a display of real backend
+// behaviour, not a promise the product doesn't keep.
+const KYC_PURGE_MS = 24 * 3600 * 1000;
+const KYC_REJECT_MS = 90 * 24 * 3600 * 1000;
+
+function fmtCountdown(ms) {
+  if (ms <= 0) return 'now';
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600),
+        m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  return `${m}m ${sec}s`;
+}
+
+// o: { status:'verified'|'rejected'|'pending', verifiedAtMs, reviewedAtMs,
+//      purgedAtMs, hold:boolean }
+function kycRetentionBannerHtml(o) {
+  const box = (bg, bd, fg, icon, title, sub) =>
+    `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid ${bd};background:${bg};border-radius:10px;margin-bottom:12px">
+       <span style="font-size:18px">${icon}</span>
+       <div style="flex:1"><div style="font-weight:800;color:${fg};font-size:13px">${title}</div>
+       <div style="font-size:12px;color:var(--text-sec);margin-top:1px">${sub}</div></div></div>`;
+  if (o.purgedAtMs) return box('var(--bg-alt)', 'var(--border)', 'var(--text-sec)', '🗑',
+    'Documents auto-deleted', `Purged ${fDate(new Date(o.purgedAtMs))} — only status &amp; type metadata is retained.`);
+  if (o.hold) return box('var(--warning-light)', 'var(--warning)', 'var(--warning)', '⏸',
+    'Auto-deletion ON HOLD', 'A legal hold (kycHold) is set — documents are retained until it is lifted.');
+  let deadline = 0, rejected = false;
+  if (o.status === 'verified' && o.verifiedAtMs) deadline = o.verifiedAtMs + KYC_PURGE_MS;
+  else if (o.status === 'rejected' && o.reviewedAtMs) { deadline = o.reviewedAtMs + KYC_REJECT_MS; rejected = true; }
+  if (!deadline) return box('var(--primary-light)', 'var(--primary)', 'var(--primary)', '🕒',
+    'Documents auto-delete 24 h after verification',
+    'The deletion clock starts the moment you approve / verify these documents.');
+  const rem = deadline - Date.now();
+  if (rem <= 0) return box('var(--warning-light)', 'var(--warning)', 'var(--warning)', '⏳',
+    'Deletion pending', 'The retention window has elapsed; files are removed on the next hourly sweep.');
+  const label = rejected ? 'Rejected documents auto-delete in' : 'Documents auto-delete in';
+  return box('var(--primary-light)', 'var(--primary)', 'var(--primary)', '⏳',
+    `${label} <span class="kyc-countdown" data-deadline="${deadline}">${fmtCountdown(rem)}</span>`,
+    'Original ID / selfie / address images are removed automatically; status &amp; type are kept.');
+}
+
+// One global 1-second ticker updates every rendered countdown in place.
+setInterval(() => {
+  document.querySelectorAll('.kyc-countdown').forEach((el) => {
+    const d = Number(el.dataset.deadline);
+    if (d) el.textContent = fmtCountdown(d - Date.now());
+  });
+}, 1000);
+
 function tearDownListeners() {
   unsubscribers.forEach(fn => { try { fn(); } catch {} });
   unsubscribers = [];
@@ -2805,8 +2861,18 @@ function viewUser(id) {
   // Each image uses class="lb-thumb" so the lightbox JS already loaded
   // earlier in this file picks it up automatically.
   const hasAnyVerifDocs = u.selfieUrl || u.idProof?.url || u.residencyProof?.url;
-  const verifDocsHtml = hasAnyVerifDocs ? `
+  // [KYC-RET] Show the retention timer + keep the section when docs have been
+  // purged (metadata remains) so staff see WHY the images are gone.
+  const uKycBanner = kycRetentionBannerHtml({
+    status: (u.idProof?.verified || u.residencyProof?.verified) ? 'verified' : 'pending',
+    verifiedAtMs: msOf((u.idProof && u.idProof.verifiedAt) || (u.residencyProof && u.residencyProof.verifiedAt)),
+    purgedAtMs: msOf(u.kycDocsPurgedAt),
+    hold: u.kycHold === true,
+  });
+  const hasVerifMeta = hasAnyVerifDocs || u.kycDocsPurgedAt || u.idProof || u.residencyProof;
+  const verifDocsHtml = hasVerifMeta ? `
     <div class="modal-section-header">Verification Documents</div>
+    ${uKycBanner}
     ${u.selfieUrl ? `
       <div class="modal-field">
         <div class="modal-label">📸 Live Selfie</div>
@@ -3393,6 +3459,13 @@ function viewHelper(id) {
 
       <!-- Document Verification -->
       <div class="modal-section-header">📄 Document Verification</div>
+      ${kycRetentionBannerHtml({
+        status: vrStatus === 'verified' ? 'verified' : vrStatus === 'rejected' ? 'rejected' : 'pending',
+        verifiedAtMs: msOf(vr.reviewedAt),
+        reviewedAtMs: msOf(vr.reviewedAt),
+        purgedAtMs: msOf(pk.docsPurgedAt),
+        hold: h.kycHold === true,
+      })}
       ${selfieCard}
       ${renderDocCard('🆔 Identity Proof', 'idProof', idProofUrl, idTypeLabel, idProofVerified, idVerifiedAt, idVerifiedBy, !vrStatus)}
       ${renderDocCard('🏠 Residency Proof', 'residencyProof', resProofUrl, resTypeLabel, resProofVerified, resVerifiedAt, resVerifiedBy, !vrStatus)}
