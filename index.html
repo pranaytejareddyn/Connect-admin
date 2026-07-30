@@ -1784,6 +1784,17 @@ function msOf(ts) {
   return isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
+// [TASKS-01] The one authoritative "tasks done" count for a helper: the
+// server-computed completedTasks (completed agreements + helpRequests),
+// mirrored in ctiBreakdown for older docs. NEVER the legacy client-side
+// totalRequests, which diverged (missed agreement completions).
+function helperCompletedTasks(h) {
+  if (!h) return 0;
+  if (typeof h.completedTasks === 'number') return h.completedTasks;
+  if (h.ctiBreakdown && typeof h.ctiBreakdown.completedTasks === 'number') return h.ctiBreakdown.completedTasks;
+  return 0;
+}
+
 // ── [KYC-RET] Verification-document retention timer ─────────────────────────
 // Shows, right at the identity/residency-proof section, how long until the
 // original documents auto-delete. The clock is anchored to the APPROVAL /
@@ -3167,7 +3178,7 @@ function renderHelpers() {
         <td>${h.phone || '—'}</td>
         <td><div style="font-weight:600">${h.district || h.city || '—'}</div><div style="font-size:11px;color:var(--text-mute)">${h.state || '—'}</div></td>
         <td>${h.rating ? `⭐ ${Number(h.rating).toFixed(1)} <span style="color:var(--text-mute);font-size:11px">(${h.totalRatings||0})</span>` : '—'}</td>
-        <td>${h.totalRequests || 0}</td>
+        <td>${helperCompletedTasks(h)}</td>
         <td>${statusBadge}</td>
         <td>${verifyBadge}</td>
         <td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">Manage</button></td>
@@ -3496,7 +3507,7 @@ function viewHelper(id) {
       <!-- Performance -->
       <div class="modal-section-header">📊 Performance</div>
       ${mf('Rating', h.rating ? `⭐ ${Number(h.rating).toFixed(1)} (${h.totalRatings || 0} reviews)` : 'No ratings yet')}
-      ${mf('Completed Tasks', h.totalRequests || 0)}
+      ${mf('Completed Tasks', helperCompletedTasks(h))}
       ${mf('Total Earnings', `₹${Number(h.totalEarnings || 0).toLocaleString('en-IN')}`)}
       ${mf('Community Trust Index', `<strong style="font-size:16px">${(typeof h.communityTrustIndex === 'number' ? h.communityTrustIndex : 49)}</strong>/100` +
         (h.ctiBreakdown ? ` <span class="user-meta">(calculated ${h.ctiCalculated != null ? h.ctiCalculated : '—'}${(h.ctiModerationTotal ? ` ${h.ctiModerationTotal > 0 ? '+' : ''}${h.ctiModerationTotal} moderation` : '')})</span>` : ''))}
@@ -4720,7 +4731,7 @@ function viewLocationRequest(id) {
       ${r.helperPhone ? mf('Phone', r.helperPhone) : ''}
       ${typeof r.helperRating === 'number' ? mf('Rating', `⭐ ${r.helperRating.toFixed(1)}/5`) : ''}
       ${typeof r.helperTrustScore === 'number' ? mf('Trust Score', `🏆 ${r.helperTrustScore}/100`) : ''}
-      ${helperFull.totalRequests ? mf('Completed Jobs', `${helperFull.totalRequests}`) : ''}
+      ${helperCompletedTasks(helperFull) ? mf('Completed Jobs', `${helperCompletedTasks(helperFull)}`) : ''}
       ${helperFull.verificationStatus ? mf('Verified', helperFull.verificationStatus === 'verified' ? '✅ Yes' : '⏳ Pending') : ''}
       <div class="modal-section-header">🗺️ Location Change</div>
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;background:var(--bg-alt);padding:14px;border-radius:8px;margin-bottom:12px">
@@ -5326,7 +5337,7 @@ function exportCSV(type) {
     data = users.map(u => [u.id, u.name||'', u.phone||'', u.state||'', u.district||'', u.city||u.village||'', u.isBlocked ? 'Blocked' : u.isSuspended ? 'Suspended' : 'Active', u.isVerified ? 'Yes' : 'No', fDate(u.createdAt)]);
   } else if (type === 'helpers') {
     headers = ['ID', 'Name', 'Phone', 'State', 'District', 'City/Village', 'Skills', 'Rating', 'Jobs', 'Status', 'Verified'];
-    data = helpers.map(h => [h.id, h.name||'', h.phone||'', h.state||'', h.district||'', h.city||h.village||'', (h.skills||[]).join(';'), h.rating||0, h.totalRequests||0, h.status||'pending', h.isVerified ? 'Yes' : 'No']);
+    data = helpers.map(h => [h.id, h.name||'', h.phone||'', h.state||'', h.district||'', h.city||h.village||'', (h.skills||[]).join(';'), h.rating||0, helperCompletedTasks(h), h.status||'pending', h.isVerified ? 'Yes' : 'No']);
   } else if (type === 'agreements') {
     headers = ['Agreement ID', 'Status', 'Initiator', 'User', 'Helper', 'Category', 'Task', 'Location', 'Date', 'Time', 'Amount', 'Method', 'Created'];
     data = agreements.map(a => [a.agreementId || a.id, a.status || 'pending', a.initiator || '—', a.userName || '', a.helperName || '', a.category || '', (a.taskDescription || '').substring(0, 100), a.location || '', a.date || '', a.startTime || '', a.amount || 0, a.paymentMethod || '', fDate(a.createdAt)]);
