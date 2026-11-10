@@ -1519,6 +1519,40 @@ function gsEsc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+// ── Shared output-encoding helpers ─────────────────────────────────────────
+// Every value that comes from Firestore / user input MUST pass through one of
+// these before it is placed in an HTML string (innerHTML, showModal, mf):
+//   esc(v)     → text nodes and quoted attribute values (& < > " ')
+//   safeUrl(u) → src= / href= (https:// only, otherwise '')
+//   jsArg(v)   → a data argument inside an inline handler: onclick="fn(${jsArg(id)})"
+//   csvSafe(v) → a CSV cell (neutralises spreadsheet formulas)
+// Declared here (first script block) so they exist before any renderer runs.
+function esc(s) { return gsEsc(s); }
+// Only https:// URLs may reach src=/href= — rejects javascript:, data:, etc.
+// The result is already HTML-escaped; '' when the URL is not acceptable.
+function safeUrl(u) {
+  var s = String(u == null ? '' : u).trim();
+  return /^https:\/\//i.test(s) ? esc(s) : '';
+}
+// A single-quoted JS string literal that is safe inside a double-quoted HTML
+// attribute. HTML-escaping alone is not enough there (the browser decodes the
+// attribute before running it as JS), so every character outside a small safe
+// set is emitted as a \uXXXX escape — it cannot close the string, the call or
+// the attribute. Plain ids render exactly as before ('abc123'), which keeps
+// decorateUnread()'s onclick-id lookup working.
+function jsArg(v) {
+  return "'" + String(v).replace(/[^A-Za-z0-9_ .,:@\/-]/g, function (c) {
+    return '\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4);
+  }) + "'";
+}
+// CSV cell text with formula injection neutralised: a leading = + - @ (or a
+// leading tab / CR) is prefixed with a single quote so spreadsheets treat the
+// cell as text. Real numbers are left alone. Callers still do the quoting.
+function csvSafe(v) {
+  if (typeof v === 'number') return String(v);
+  var s = String(v);
+  return /^[\t\r\n ]*[=+\-@]/.test(s) || /^[\t\r]/.test(s) ? "'" + s : s;
+}
 // Highlight the matched span so it is obvious WHY a row matched — e.g. the
 // query hit a phone number rather than the name being shown.
 function gsMark(text, q) {
@@ -1712,15 +1746,15 @@ function populateDistrictsForFilter(filterPrefix, stateName) {
   if (!distEl) return;
   if (!stateName) {
     const all = getAllUsedLocations();
-    distEl.innerHTML = '<option value="">All Districts</option>' + all.districts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cityEl) cityEl.innerHTML = '<option value="">All Cities</option>' + all.cities.map(c => `<option value="${c}">${c}</option>`).join('');
+    distEl.innerHTML = '<option value="">All Districts</option>' + all.districts.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
+    if (cityEl) cityEl.innerHTML = '<option value="">All Cities</option>' + all.cities.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
     return;
   }
   const districts = getDistrictsForState(stateName);
-  distEl.innerHTML = '<option value="">All Districts</option>' + districts.map(d => `<option value="${d}">${d}</option>`).join('');
+  distEl.innerHTML = '<option value="">All Districts</option>' + districts.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
   if (cityEl) {
     const cities = [...new Set([...users, ...helpers].filter(u => u.state === stateName).map(u => u.city || u.village).filter(Boolean))].sort();
-    cityEl.innerHTML = '<option value="">All Cities</option>' + cities.map(c => `<option value="${c}">${c}</option>`).join('');
+    cityEl.innerHTML = '<option value="">All Cities</option>' + cities.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
   }
 }
 
@@ -1734,11 +1768,11 @@ function bcUpdateDistrictsForState() {
     return;
   }
   const districts = getDistrictsForState(state);
-  if (distEl) distEl.innerHTML = districts.map(d => `<option value="${d}">${d}</option>`).join('');
+  if (distEl) distEl.innerHTML = districts.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
   if (cityEl) {
     const cities = [...new Set([...users, ...helpers].filter(u => u.state === state).map(u => u.city || u.village).filter(Boolean))].sort();
-    if (cities.length === 0) cityEl.innerHTML = districts.map(d => `<option value="${d}">${d}</option>`).join('');
-    else cityEl.innerHTML = cities.map(c => `<option value="${c}">${c}</option>`).join('');
+    if (cities.length === 0) cityEl.innerHTML = districts.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
+    else cityEl.innerHTML = cities.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
   }
 }
 
@@ -2464,7 +2498,7 @@ function renderRecentActivity() {
     ...helpers.filter(h => h.status === 'pending').slice(0, 2).map(h => ({ emoji: '🛡️', text: `New helper application: ${h.name || h.phone}`, time: h.createdAt })),
   ].sort((a,b) => (b.time?.toMillis?.()||0) - (a.time?.toMillis?.()||0)).slice(0, 8);
   document.getElementById('recent-activity').innerHTML = recent.length === 0 ? '<div class="table-empty">No recent activity</div>' :
-    recent.map(r => `<div class="audit-row"><div class="audit-icon">${r.emoji}</div><div class="audit-content">${r.text}<div class="audit-meta">${fDate(r.time)}</div></div></div>`).join('');
+    recent.map(r => `<div class="audit-row"><div class="audit-icon">${r.emoji}</div><div class="audit-content">${esc(r.text)}<div class="audit-meta">${fDate(r.time)}</div></div></div>`).join('');
 }
 </script>
 
@@ -2591,15 +2625,15 @@ function renderUsers() {
         u.isSuspended ? '<span class="badge badge-suspended">⚠️ Suspended</span>' :
         u.isVerified ? '<span class="badge badge-verified">✅ Verified</span>' : '<span class="badge badge-active">Active</span>';
       const initials = (u.name || u.phone || '?').substring(0, 2).toUpperCase();
-      const locText = u.district || u.city ? `<div>📍 ${u.district || u.city}</div><div style="font-size:11px;color:var(--text-mute)">${u.state || ''}</div>` : '—';
+      const locText = u.district || u.city ? `<div>📍 ${esc(u.district || u.city)}</div><div style="font-size:11px;color:var(--text-mute)">${esc(u.state || '')}</div>` : '—';
       return `<tr>
-        <td><input type="checkbox" class="checkbox" data-uid="${u.id}" ${selectedUsers.has(u.id) ? 'checked' : ''}/></td>
-        <td><div class="user-cell"><div class="user-avatar">${initials}</div><div class="user-info"><div class="user-name">${u.name || 'Unnamed'}</div><div class="user-meta"><code>${u.id.slice(0,12)}</code></div></div></div></td>
-        <td>${u.phone || '—'}</td>
+        <td><input type="checkbox" class="checkbox" data-uid="${esc(u.id)}" ${selectedUsers.has(u.id) ? 'checked' : ''}/></td>
+        <td><div class="user-cell"><div class="user-avatar">${esc(initials)}</div><div class="user-info"><div class="user-name">${esc(u.name || 'Unnamed')}</div><div class="user-meta"><code>${esc(u.id.slice(0,12))}</code></div></div></div></td>
+        <td>${esc(u.phone || '—')}</td>
         <td>${locText}</td>
         <td>${statusBadge}</td>
         <td>${fDate(u.createdAt)}</td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewUser('${u.id}')">Manage</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewUser(${jsArg(u.id)})">Manage</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 
@@ -2681,10 +2715,10 @@ function openCTIAdjust(role, id, name, reportId) {
   const current = (d && typeof d.communityTrustIndex === 'number') ? d.communityTrustIndex : 49;
   const reasons = CTI_REASONS.map(r => `<option value="${r}">${r}</option>`).join('');
   showModal(
-    `<div class="modal-header"><div class="modal-title">🎯 Adjust CTI — ${name || id}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">🎯 Adjust CTI — ${esc(name || id)}</div><button class="modal-close" onclick="closeModal()">×</button></div>
      <div class="modal-body">
-       ${mf('Account', `${role === 'user' ? '👥 User' : '🛡️ Helper'} · <code>${id}</code>`)}
-       ${mf('Current CTI', `<strong id="cti-cur" style="font-size:18px">${current}</strong> / 100`)}
+       ${mfRaw('Account', `${role === 'user' ? '👥 User' : '🛡️ Helper'} · <code>${esc(id)}</code>`)}
+       ${mfRaw('Current CTI', `<strong id="cti-cur" style="font-size:18px">${current}</strong> / 100`)}
        <div class="modal-field"><div class="modal-label">Action</div>
          <select id="cti-action" class="form-select" onchange="ctiPreview(${current})">
            <option value="no_change">No change</option>
@@ -2707,7 +2741,7 @@ function openCTIAdjust(role, id, name, reportId) {
      </div>
      <div class="modal-footer">
        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-primary" id="cti-apply" onclick="applyCTIAdjust('${role}','${id}','${reportId || ''}',${current})">Apply adjustment</button>
+       <button class="btn btn-primary" id="cti-apply" onclick="applyCTIAdjust(${jsArg(role)},${jsArg(id)},${jsArg(reportId || '')},${current})">Apply adjustment</button>
      </div>`
   );
 }
@@ -2750,7 +2784,7 @@ async function applyCTIAdjust(role, id, reportId, current) {
 }
 
 async function openCTIHistory(role, id, name) {
-  showModal(`<div class="modal-header"><div class="modal-title">🕑 CTI History — ${name || id}</div><button class="modal-close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="table-empty">Loading…</div></div>`);
+  showModal(`<div class="modal-header"><div class="modal-title">🕑 CTI History — ${esc(name || id)}</div><button class="modal-close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="table-empty">Loading…</div></div>`);
   let rows = [];
   try {
     const snap = await db.collection('ctiAdjustments').where('targetId', '==', id).limit(200).get();
@@ -2764,15 +2798,15 @@ async function openCTIHistory(role, id, name) {
         const canReverse = !a.isReversal && !a.reversed;
         return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-            <strong>${a.previousCTI} → ${a.delta >= 0 ? '+' : ''}${a.delta} → ${a.resultingCTI}</strong> ${tag}
+            <strong>${esc(a.previousCTI)} → ${a.delta >= 0 ? '+' : ''}${esc(a.delta)} → ${esc(a.resultingCTI)}</strong> ${tag}
           </div>
-          <div style="font-size:12.5px;color:var(--text-sec);margin-top:4px">${a.reasonCategory || '—'}</div>
-          <div style="font-size:12px;color:var(--text-mute);margin-top:2px">${(a.note || '').replace(/</g,'&lt;')}</div>
-          <div style="font-size:11px;color:var(--text-mute);margin-top:6px">${a.adminEmail || '—'} · ${when}${a.reportId ? ' · report ' + a.reportId : ''}</div>
-          ${canReverse ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="reverseCTI('${role}','${id}','${a.id}')">↩ Reverse this</button>` : ''}
+          <div style="font-size:12.5px;color:var(--text-sec);margin-top:4px">${esc(a.reasonCategory || '—')}</div>
+          <div style="font-size:12px;color:var(--text-mute);margin-top:2px">${esc(a.note || '')}</div>
+          <div style="font-size:11px;color:var(--text-mute);margin-top:6px">${esc(a.adminEmail || '—')} · ${when}${a.reportId ? ' · report ' + esc(a.reportId) : ''}</div>
+          ${canReverse ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="reverseCTI(${jsArg(role)},${jsArg(id)},${jsArg(a.id)})">↩ Reverse this</button>` : ''}
         </div>`;
       }).join('');
-  showModal(`<div class="modal-header"><div class="modal-title">🕑 CTI History — ${name || id}</div><button class="modal-close" onclick="closeModal()">×</button></div><div class="modal-body">${body}</div>`);
+  showModal(`<div class="modal-header"><div class="modal-title">🕑 CTI History — ${esc(name || id)}</div><button class="modal-close" onclick="closeModal()">×</button></div><div class="modal-body">${body}</div>`);
 }
 
 async function reverseCTI(role, id, adjustmentId) {
@@ -2888,25 +2922,25 @@ function viewUser(id) {
       <div class="modal-field">
         <div class="modal-label">📸 Live Selfie</div>
         <div class="modal-value">
-          <img class="lb-thumb" src="${u.selfieUrl}" style="width:120px;height:120px;border-radius:50%;object-fit:cover;border:3px solid var(--border);cursor:zoom-in" alt="User selfie"/>
+          <img class="lb-thumb" src="${safeUrl(u.selfieUrl)}" style="width:120px;height:120px;border-radius:50%;object-fit:cover;border:3px solid var(--border);cursor:zoom-in" alt="User selfie"/>
         </div>
       </div>
     ` : ''}
     ${u.idProof?.url ? `
       <div class="modal-field">
-        <div class="modal-label">🆔 Identity Proof — ${idLabel}</div>
+        <div class="modal-label">🆔 Identity Proof — ${esc(idLabel)}</div>
         <div class="modal-value">
-          <img class="lb-thumb" src="${u.idProof.url}" style="max-width:300px;max-height:240px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" alt="Identity proof"/>
-          ${u.idProof.verified ? '<div style="margin-top:6px"><span class="badge badge-success">✓ Verified by ' + (u.idProof.verifiedBy || 'admin') + '</span></div>' : ''}
+          <img class="lb-thumb" src="${safeUrl(u.idProof.url)}" style="max-width:300px;max-height:240px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" alt="Identity proof"/>
+          ${u.idProof.verified ? '<div style="margin-top:6px"><span class="badge badge-success">✓ Verified by ' + esc(u.idProof.verifiedBy || 'admin') + '</span></div>' : ''}
         </div>
       </div>
     ` : ''}
     ${u.residencyProof?.url ? `
       <div class="modal-field">
-        <div class="modal-label">🏠 Residency Proof — ${resLabel}</div>
+        <div class="modal-label">🏠 Residency Proof — ${esc(resLabel)}</div>
         <div class="modal-value">
-          <img class="lb-thumb" src="${u.residencyProof.url}" style="max-width:300px;max-height:240px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" alt="Residency proof"/>
-          ${u.residencyProof.verified ? '<div style="margin-top:6px"><span class="badge badge-success">✓ Verified by ' + (u.residencyProof.verifiedBy || 'admin') + '</span></div>' : ''}
+          <img class="lb-thumb" src="${safeUrl(u.residencyProof.url)}" style="max-width:300px;max-height:240px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" alt="Residency proof"/>
+          ${u.residencyProof.verified ? '<div style="margin-top:6px"><span class="badge badge-success">✓ Verified by ' + esc(u.residencyProof.verifiedBy || 'admin') + '</span></div>' : ''}
         </div>
       </div>
     ` : ''}
@@ -2921,11 +2955,11 @@ function viewUser(id) {
   showModal(
     `<div class="modal-header"><div class="modal-title">👤 User Profile</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      ${u.photoURL ? `<div style="text-align:center;margin-bottom:16px"><img class="lb-thumb" src="${u.photoURL}" style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:3px solid var(--border);cursor:zoom-in" alt="Profile picture"/></div>` : ''}
+      ${u.photoURL ? `<div style="text-align:center;margin-bottom:16px"><img class="lb-thumb" src="${safeUrl(u.photoURL)}" style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:3px solid var(--border);cursor:zoom-in" alt="Profile picture"/></div>` : ''}
       ${mf('Name', u.name || '—')}
       ${mf('Phone', u.phone || '—')}
-      ${mf('Public ID', `<code style="font-size:14px;font-weight:800">${u.publicId || '—'}</code>`)}
-      ${mf('User ID', `<code>${u.id}</code>`)}
+      ${mfRaw('Public ID', `<code style="font-size:14px;font-weight:800">${esc(u.publicId || '—')}</code>`)}
+      ${mfRaw('User ID', `<code>${esc(u.id)}</code>`)}
       ${u.age ? mf('Age', u.age + ' years') : ''}
       ${mf('Date of Birth', u.dateOfBirth ? new Date(u.dateOfBirth).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'No Info')}
       ${u.gender ? mf('Gender', u.gender) : ''}
@@ -2935,8 +2969,8 @@ function viewUser(id) {
       ${isNewOnboarded ? `
         ${mf('Location', profileLocFull)}
         ${u.pincode ? mf('Pincode', u.pincode) : ''}
-        ${(typeof u.lat === 'number' && typeof u.lng === 'number') ? mf('Coordinates', `<code>${u.lat.toFixed(5)}, ${u.lng.toFixed(5)}</code>`) : ''}
-        ${u.placeId ? mf('Place ID', `<code style="font-size:11px">${u.placeId}</code>`) : ''}
+        ${(typeof u.lat === 'number' && typeof u.lng === 'number') ? mfRaw('Coordinates', `<code>${u.lat.toFixed(5)}, ${u.lng.toFixed(5)}</code>`) : ''}
+        ${u.placeId ? mfRaw('Place ID', `<code style="font-size:11px">${esc(u.placeId)}</code>`) : ''}
         <div style="font-size:11px;color:var(--text-mute);font-style:italic;margin-top:6px">Set during onboarding. Can only be changed via Edit Profile.</div>
       ` : `
         <div style="padding:10px;background:var(--bg-alt);border-radius:8px;color:var(--text-mute);font-size:12px;font-style:italic">Profile address not set — user signed up before the home/search separation. Their location data is shown as Search Location below.</div>
@@ -2944,25 +2978,25 @@ function viewUser(id) {
       <div class="modal-section-header">🔍 Search Location</div>
       ${mf('Currently searching', searchLocFull || '— Not set')}
       ${searchPincode ? mf('Pincode', searchPincode) : ''}
-      ${(typeof searchLat === 'number' && typeof searchLng === 'number') ? mf('Coordinates', `<code>${searchLat.toFixed(5)}, ${searchLng.toFixed(5)}</code>`) : ''}
-      ${searchPlaceId ? mf('Place ID', `<code style="font-size:11px">${searchPlaceId}</code>`) : ''}
+      ${(typeof searchLat === 'number' && typeof searchLng === 'number') ? mfRaw('Coordinates', `<code>${searchLat.toFixed(5)}, ${searchLng.toFixed(5)}</code>`) : ''}
+      ${searchPlaceId ? mfRaw('Place ID', `<code style="font-size:11px">${esc(searchPlaceId)}</code>`) : ''}
       ${u.searchLocationUpdatedAt ? mf('Last changed', fDate(u.searchLocationUpdatedAt)) : ''}
       <div style="font-size:11px;color:var(--text-mute);font-style:italic;margin-top:6px">Source: ${searchSource}</div>
       ${addressesDiffer ? `
         <div style="background:var(--info-light);padding:10px;border-radius:8px;margin-top:12px;border-left:3px solid var(--info)">
           <div style="font-weight:700;color:var(--info);font-size:12px">ℹ️ User is searching outside their home region</div>
-          <div style="font-size:11px;color:var(--text-mute);margin-top:3px">Home: <strong>${u.district}${u.state ? ', ' + u.state : ''}</strong> · Search: <strong>${u.searchDistrict}${u.searchState ? ', ' + u.searchState : ''}</strong></div>
+          <div style="font-size:11px;color:var(--text-mute);margin-top:3px">Home: <strong>${esc(u.district)}${u.state ? ', ' + esc(u.state) : ''}</strong> · Search: <strong>${esc(u.searchDistrict)}${u.searchState ? ', ' + esc(u.searchState) : ''}</strong></div>
         </div>
       ` : ''}
       <div class="modal-section-header">Verification</div>
-      ${mf('Status', userVerificationBadge(vStatus))}
+      ${mfRaw('Status', userVerificationBadge(vStatus))}
       ${u.verificationSubmittedAt ? mf('Submitted', fDate(u.verificationSubmittedAt)) : ''}
       ${u.verifiedAt ? mf('Verified', fDate(u.verifiedAt) + (u.verifiedBy ? ' by ' + u.verifiedBy : '')) : ''}
       ${verifDocsHtml}
       <div class="modal-section-header">Account</div>
       ${mf('Status', u.isBlocked ? '🚫 Blocked' : u.isSuspended ? '⚠️ Suspended' : u.isVerified ? '✅ Verified & Active' : 'Active')}
       ${mf('Joined', fDate(u.createdAt))}
-      ${u.warnings ? mf('Warnings Issued', `<span class="badge badge-warning">${u.warnings}</span>`) : ''}
+      ${u.warnings ? mfRaw('Warnings Issued', `<span class="badge badge-warning">${esc(u.warnings)}</span>`) : ''}
       <div class="modal-section-header">Activity</div>
       ${mf('Alerts Raised', userAlerts.length)}
       ${mf('Reports Submitted', userReports.length)}
@@ -2971,12 +3005,12 @@ function viewUser(id) {
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
       ${canActOnVerification ? `
-        <button class="btn btn-success btn-sm" onclick="verifyUser('${u.id}', true)">✓ Approve Verification</button>
-        <button class="btn btn-danger btn-sm" onclick="verifyUser('${u.id}', false)">✗ Reject Verification</button>
+        <button class="btn btn-success btn-sm" onclick="verifyUser(${jsArg(u.id)}, true)">✓ Approve Verification</button>
+        <button class="btn btn-danger btn-sm" onclick="verifyUser(${jsArg(u.id)}, false)">✗ Reject Verification</button>
       ` : ''}
-      <button class="btn btn-warning btn-sm" onclick="userAction('${u.id}','warn')">⚠️ Warn</button>
-      ${u.isSuspended ? `<button class="btn btn-success btn-sm" onclick="userAction('${u.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="userAction('${u.id}','suspend')">⚠️ Suspend</button>`}
-      ${u.isBlocked ? `<button class="btn btn-success btn-sm" onclick="userAction('${u.id}','unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="userAction('${u.id}','block')">🚫 Block</button>`}
+      <button class="btn btn-warning btn-sm" onclick="userAction(${jsArg(u.id)},'warn')">⚠️ Warn</button>
+      ${u.isSuspended ? `<button class="btn btn-success btn-sm" onclick="userAction(${jsArg(u.id)},'unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="userAction(${jsArg(u.id)},'suspend')">⚠️ Suspend</button>`}
+      ${u.isBlocked ? `<button class="btn btn-success btn-sm" onclick="userAction(${jsArg(u.id)},'unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="userAction(${jsArg(u.id)},'block')">🚫 Block</button>`}
     </div>`
   );
 }
@@ -3053,7 +3087,7 @@ function showModerationModal(accountType, accountId, action, accountName) {
   showModal(
     `<div class="modal-header"><div class="modal-title">${actionConfig.emoji} ${actionConfig.title}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <div class="modal-field"><div class="modal-label">Target Account</div><div class="modal-value"><strong>${accountName}</strong> <code>${accountId.slice(0,12)}</code></div></div>
+      <div class="modal-field"><div class="modal-label">Target Account</div><div class="modal-value"><strong>${esc(accountName)}</strong> <code>${esc(accountId.slice(0,12))}</code></div></div>
       <div class="modal-field"><div class="modal-label">Reason Category *</div><select id="mod-category" class="form-select" required><option value="">Select category...</option>${categories.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
       <div class="modal-field"><div class="modal-label">Detailed Explanation * (visible to account holder)</div><textarea id="mod-reason" class="form-textarea" placeholder="Explain why this action is being taken..." maxlength="500"></textarea></div>
       ${action === 'suspend' ? `<div class="modal-field"><div class="modal-label">Duration (days)</div><select id="mod-duration" class="form-select"><option value="1">1 day</option><option value="3">3 days</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="90">90 days</option></select></div>` : ''}
@@ -3062,7 +3096,7 @@ function showModerationModal(accountType, accountId, action, accountName) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-${actionConfig.color}" onclick="executeModerationAction('${accountType}','${accountId}','${action}')">${actionConfig.emoji} Confirm ${action.charAt(0).toUpperCase() + action.slice(1)}</button>
+      <button class="btn btn-${actionConfig.color}" onclick="executeModerationAction(${jsArg(accountType)},${jsArg(accountId)},${jsArg(action)})">${actionConfig.emoji} Confirm ${action.charAt(0).toUpperCase() + action.slice(1)}</button>
     </div>`
   );
 }
@@ -3174,14 +3208,14 @@ function renderHelpers() {
       const online = h.isOnline ? ' 🟢' : '';
       const initials = (h.name || '?').substring(0, 2).toUpperCase();
       return `<tr>
-        <td><div class="user-cell"><div class="user-avatar" style="background:var(--purple)">${initials}</div><div class="user-info"><div class="user-name">${h.name || 'Unnamed'}${online}</div><div class="user-meta">${(h.skills||[]).slice(0,2).join(', ') || '—'}</div></div></div></td>
-        <td>${h.phone || '—'}</td>
-        <td><div style="font-weight:600">${h.district || h.city || '—'}</div><div style="font-size:11px;color:var(--text-mute)">${h.state || '—'}</div></td>
-        <td>${h.rating ? `⭐ ${Number(h.rating).toFixed(1)} <span style="color:var(--text-mute);font-size:11px">(${h.totalRatings||0})</span>` : '—'}</td>
+        <td><div class="user-cell"><div class="user-avatar" style="background:var(--purple)">${esc(initials)}</div><div class="user-info"><div class="user-name">${esc(h.name || 'Unnamed')}${online}</div><div class="user-meta">${esc((h.skills||[]).slice(0,2).join(', ') || '—')}</div></div></div></td>
+        <td>${esc(h.phone || '—')}</td>
+        <td><div style="font-weight:600">${esc(h.district || h.city || '—')}</div><div style="font-size:11px;color:var(--text-mute)">${esc(h.state || '—')}</div></td>
+        <td>${h.rating ? `⭐ ${Number(h.rating).toFixed(1)} <span style="color:var(--text-mute);font-size:11px">(${esc(h.totalRatings||0)})</span>` : '—'}</td>
         <td>${helperCompletedTasks(h)}</td>
         <td>${statusBadge}</td>
         <td>${verifyBadge}</td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">Manage</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewHelper(${jsArg(h.id)})">Manage</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 }
@@ -3353,11 +3387,11 @@ function viewHelper(id) {
       return `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);text-align:center;color:var(--text-mute);font-size:13px;margin-bottom:10px"><div style="font-weight:700;color:var(--text-sec);margin-bottom:4px">${label}</div>⚠️ Not submitted (helper skipped this step or registered before document was required)</div>`;
     }
     const verifyBadge = verified ? `<span class="badge badge-verified">✅ Verified</span>` : `<span class="badge badge-pending">⏳ Pending review</span>`;
-    const verifyMeta = verified && verifiedAt ? `<div style="font-size:11px;color:var(--text-mute);margin-top:4px">Verified ${fDate(verifiedAt)} by ${verifiedBy || 'Admin'}</div>` : '';
+    const verifyMeta = verified && verifiedAt ? `<div style="font-size:11px;color:var(--text-mute);margin-top:4px">Verified ${fDate(verifiedAt)} by ${esc(verifiedBy || 'Admin')}</div>` : '';
     const btnLabel = verified ? '✗ Un-verify' : '✓ Mark as Verified';
     const btnClass = verified ? 'btn-ghost' : 'btn-success';
-    const verifyBtn = allowVerify ? `<div style="margin-top:10px;display:flex;gap:8px"><button class="btn ${btnClass} btn-sm" onclick="verifyHelperDocument('${h.id}','${kind}')">${btnLabel}</button></div>` : '';
-    return `<div style="padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px"><div style="flex:1"><div style="font-weight:700;color:var(--text);margin-bottom:2px">${label}</div><div style="font-size:12px;color:var(--text-sec)">Type: <strong>${typeLabel || 'Unknown'}</strong></div>${verifyMeta}</div>${verifyBadge}</div><div class="lb-thumb" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none;cursor:zoom-in"><img src="${url}" style="width:100%;max-height:280px;object-fit:contain;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">🔍 Click to view full size</div></div>${verifyBtn}</div>`;
+    const verifyBtn = allowVerify ? `<div style="margin-top:10px;display:flex;gap:8px"><button class="btn ${btnClass} btn-sm" onclick="verifyHelperDocument(${jsArg(h.id)},${jsArg(kind)})">${btnLabel}</button></div>` : '';
+    return `<div style="padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px"><div style="flex:1"><div style="font-weight:700;color:var(--text);margin-bottom:2px">${label}</div><div style="font-size:12px;color:var(--text-sec)">Type: <strong>${esc(typeLabel || 'Unknown')}</strong></div>${verifyMeta}</div>${verifyBadge}</div><div class="lb-thumb" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none;cursor:zoom-in"><img src="${safeUrl(url)}" style="width:100%;max-height:280px;object-fit:contain;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">🔍 Click to view full size</div></div>${verifyBtn}</div>`;
   };
 
   // Declaration display.
@@ -3373,19 +3407,19 @@ function viewHelper(id) {
       { key: 'agreeInvestigation',  label: 'Agrees details may be used for verification, audit, or investigation' },
     ];
     const allTicked = items.every(i => consents[i.key] === true);
-    declarationHtml = `<div style="padding:14px;border:1.5px solid var(--success);background:var(--success-light);border-radius:10px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-weight:800;color:var(--success)">⚖️ ${allTicked ? 'All 6 commitments accepted' : 'Some commitments NOT accepted'}</div><div style="font-size:12px;color:var(--text-sec);margin-top:2px">Version <code>${h.declaration.version || 'unknown'}</code> · Accepted ${fDate(h.declaration.acceptedAt)}</div></div><span class="badge badge-${allTicked ? 'verified' : 'rejected'}">${allTicked ? '✅ Complete' : '⚠️ Incomplete'}</span></div><div style="font-size:13px;line-height:1.7">${items.map((it, i) => `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.06)'}"><span style="font-size:16px;line-height:1">${consents[it.key] ? '✅' : '❌'}</span><span style="flex:1;color:${consents[it.key] ? 'var(--text)' : 'var(--danger)'}">${i + 1}. ${it.label}</span></div>`).join('')}</div></div>`;
+    declarationHtml = `<div style="padding:14px;border:1.5px solid var(--success);background:var(--success-light);border-radius:10px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-weight:800;color:var(--success)">⚖️ ${allTicked ? 'All 6 commitments accepted' : 'Some commitments NOT accepted'}</div><div style="font-size:12px;color:var(--text-sec);margin-top:2px">Version <code>${esc(h.declaration.version || 'unknown')}</code> · Accepted ${fDate(h.declaration.acceptedAt)}</div></div><span class="badge badge-${allTicked ? 'verified' : 'rejected'}">${allTicked ? '✅ Complete' : '⚠️ Incomplete'}</span></div><div style="font-size:13px;line-height:1.7">${items.map((it, i) => `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.06)'}"><span style="font-size:16px;line-height:1">${consents[it.key] ? '✅' : '❌'}</span><span style="flex:1;color:${consents[it.key] ? 'var(--text)' : 'var(--danger)'}">${i + 1}. ${it.label}</span></div>`).join('')}</div></div>`;
   } else {
     declarationHtml = `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);font-size:13px;color:var(--text-mute);text-align:center">⚠️ No declaration on file (helper registered before declaration was required)</div>`;
   }
 
   // Skills / services chips.
   const skillsChips = (h.skills || []).length > 0
-    ? (h.skills || []).map(s => `<span class="badge badge-primary" style="margin-right:4px;margin-bottom:4px;display:inline-block">${s}</span>`).join('')
+    ? (h.skills || []).map(s => `<span class="badge badge-primary" style="margin-right:4px;margin-bottom:4px;display:inline-block">${esc(s)}</span>`).join('')
     : '—';
 
   // Languages chips.
   const langsChips = (h.languages || []).length > 0
-    ? (h.languages || []).map(l => `<span class="badge badge-info" style="margin-right:4px;margin-bottom:4px;display:inline-block">${l}</span>`).join('')
+    ? (h.languages || []).map(l => `<span class="badge badge-info" style="margin-right:4px;margin-bottom:4px;display:inline-block">${esc(l)}</span>`).join('')
     : '—';
 
   // Helper Gallery — showcase photos with per-image removal (mandatory reason).
@@ -3394,24 +3428,24 @@ function viewHelper(id) {
     ? `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);text-align:center;color:var(--text-mute);font-size:13px">No gallery images uploaded.</div>`
     : `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${galleryArr.map((url, i) => `
         <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg-alt)">
-          <div class="lb-thumb" style="display:block;cursor:zoom-in"><img src="${url}" style="width:100%;height:120px;object-fit:cover;display:block"/></div>
-          <button class="btn btn-danger btn-sm" style="width:100%;border-radius:0;border:none" onclick="removeGalleryImage('${h.id}', ${i})">🗑 Remove</button>
+          <div class="lb-thumb" style="display:block;cursor:zoom-in"><img src="${safeUrl(url)}" style="width:100%;height:120px;object-fit:cover;display:block"/></div>
+          <button class="btn btn-danger btn-sm" style="width:100%;border-radius:0;border:none" onclick="removeGalleryImage(${jsArg(h.id)}, ${i})">🗑 Remove</button>
         </div>`).join('')}</div>`;
 
   // Header avatar (selfie circle).
   const initials = (h.name || '?').substring(0, 2).toUpperCase();
   const headerAvatar = selfieUrl
-    ? `<img class="lb-thumb" src="${selfieUrl}" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid var(--primary);cursor:zoom-in"/>`
-    : `<div style="width:80px;height:80px;border-radius:50%;background:var(--purple);color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:28px;border:3px solid var(--primary)">${initials}</div>`;
+    ? `<img class="lb-thumb" src="${safeUrl(selfieUrl)}" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid var(--primary);cursor:zoom-in"/>`
+    : `<div style="width:80px;height:80px;border-radius:50%;background:var(--purple);color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:28px;border:3px solid var(--primary)">${esc(initials)}</div>`;
 
   // Map link.
   const mapLink = (h.lat && h.lng)
-    ? `<a href="https://www.google.com/maps?q=${h.lat},${h.lng}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700;text-decoration:none">📍 View on Google Maps</a>`
+    ? `<a href="https://www.google.com/maps?q=${esc(h.lat)},${esc(h.lng)}" target="_blank" rel="noopener noreferrer" style="color:var(--primary);font-weight:700;text-decoration:none">📍 View on Google Maps</a>`
     : '—';
 
   // Selfie standalone card (no verify button — captured live).
   const selfieCard = selfieUrl
-    ? `<div style="padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px"><div style="flex:1"><div style="font-weight:700;color:var(--text);margin-bottom:2px">🤳 Selfie</div><div style="font-size:12px;color:var(--text-sec)">Captured live during onboarding</div></div><span class="badge badge-info">📷 Live Capture</span></div><div class="lb-thumb" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none;cursor:zoom-in"><img src="${selfieUrl}" style="width:100%;max-height:280px;object-fit:contain;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">🔍 Click to view full size</div></div></div>`
+    ? `<div style="padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px"><div style="flex:1"><div style="font-weight:700;color:var(--text);margin-bottom:2px">🤳 Selfie</div><div style="font-size:12px;color:var(--text-sec)">Captured live during onboarding</div></div><span class="badge badge-info">📷 Live Capture</span></div><div class="lb-thumb" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none;cursor:zoom-in"><img src="${safeUrl(selfieUrl)}" style="width:100%;max-height:280px;object-fit:contain;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">🔍 Click to view full size</div></div></div>`
     : `<div style="padding:12px;border:1.5px dashed var(--border);border-radius:10px;background:var(--bg-alt);text-align:center;color:var(--text-mute);font-size:13px;margin-bottom:10px"><div style="font-weight:700;color:var(--text-sec);margin-bottom:4px">🤳 Selfie</div>⚠️ Not on file (helper registered before selfie was required)</div>`;
 
   showModal(
@@ -3422,8 +3456,8 @@ function viewHelper(id) {
       <div style="display:flex;gap:16px;align-items:center;padding:16px;background:var(--bg-alt);border-radius:12px;margin-bottom:16px">
         ${headerAvatar}
         <div style="flex:1;min-width:0">
-          <div style="font-size:20px;font-weight:800;color:var(--text);margin-bottom:4px">${h.name || 'Unnamed'}</div>
-          <div style="font-size:13px;color:var(--text-sec);margin-bottom:6px">${h.phone || '—'} · <code>${h.id.slice(0,12)}</code></div>
+          <div style="font-size:20px;font-weight:800;color:var(--text);margin-bottom:4px">${esc(h.name || 'Unnamed')}</div>
+          <div style="font-size:13px;color:var(--text-sec);margin-bottom:6px">${esc(h.phone || '—')} · <code>${esc(h.id.slice(0,12))}</code></div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             ${h.isBlocked ? '<span class="badge badge-blocked">🚫 Blocked</span>' :
               h.isSuspended ? '<span class="badge badge-suspended">⚠️ Suspended</span>' :
@@ -3441,12 +3475,12 @@ function viewHelper(id) {
       <!-- Personal Info -->
       <div class="modal-section-header">👤 Personal Info</div>
       ${mf('Full Name', h.name || '—')}
-      ${mf('Public ID', `<code style="font-size:14px;font-weight:800">${h.publicId || '—'}</code>`)}
-      ${mf('Account ID', `<code>${h.id}</code>`)}
+      ${mfRaw('Public ID', `<code style="font-size:14px;font-weight:800">${esc(h.publicId || '—')}</code>`)}
+      ${mfRaw('Account ID', `<code>${esc(h.id)}</code>`)}
       ${mf('Age', h.age ? `${h.age} years` : '—')}
       ${mf('Gender', h.gender ? h.gender.charAt(0).toUpperCase() + h.gender.slice(1) : '—')}
-      ${mf('Languages', langsChips)}
-      ${mf('Bio', h.bio || '<i style="color:var(--text-mute)">No bio provided</i>')}
+      ${mfRaw('Languages', langsChips)}
+      ${mfRaw('Bio', h.bio ? esc(h.bio) : '<i style="color:var(--text-mute)">No bio provided</i>')}
       ${mf('Phone', h.phone || '—')}
       ${mf('Joined', fDate(h.createdAt))}
 
@@ -3456,12 +3490,12 @@ function viewHelper(id) {
       ${mf('District', h.district || '—')}
       ${mf('Village / Town', h.village || h.city || '—')}
       ${mf('Pincode', h.pincode || '—')}
-      ${mf('Coordinates', mapLink)}
-      ${h.placeId ? mf('Google Place ID', `<code style="font-size:10px">${h.placeId}</code>`) : ''}
+      ${mfRaw('Coordinates', mapLink)}
+      ${h.placeId ? mfRaw('Google Place ID', `<code style="font-size:10px">${esc(h.placeId)}</code>`) : ''}
 
       <!-- Services -->
       <div class="modal-section-header">🛠️ Services Offered</div>
-      ${mf('Selected Services', skillsChips)}
+      ${mfRaw('Selected Services', skillsChips)}
       ${mf('Pricing', h.pricingType === 'free' ? '💚 Free' : `💰 ₹${h.hourlyRate || 0}/hr`)}
 
       <!-- Helper Gallery -->
@@ -3485,16 +3519,16 @@ function viewHelper(id) {
       ${vrStatus ? `
         <div style="padding:14px;border:1.5px solid var(--primary);border-radius:10px;background:var(--bg-alt);margin-top:4px">
           <div style="font-weight:800;color:var(--primary);margin-bottom:8px">🔎 Verification Request</div>
-          ${mf('Request Status', `<span class="badge badge-${vrStatus === 'verified' ? 'approved' : vrStatus === 'rejected' ? 'rejected' : vrStatus === 'info_requested' ? 'warning' : 'pending'}">${vrStatus.replace('_',' ')}</span>`)}
+          ${mfRaw('Request Status', `<span class="badge badge-${vrStatus === 'verified' ? 'approved' : vrStatus === 'rejected' ? 'rejected' : vrStatus === 'info_requested' ? 'warning' : 'pending'}">${esc(vrStatus.replace('_',' '))}</span>`)}
           ${vr.submittedAt ? mf('Submitted', fDate(vr.submittedAt)) : ''}
           ${vr.reviewedAt ? mf('Reviewed', fDate(vr.reviewedAt) + (vr.reviewedBy ? ' by ' + vr.reviewedBy : '')) : ''}
           ${vr.adminNote ? mf('Admin Note', vr.adminNote) : ''}
           ${typeof vr.rejectionCount === 'number' && vr.rejectionCount > 0 ? mf('Resubmissions', vr.rejectionCount) : ''}
           ${vrStatus === 'pending' ? `
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-              <button class="btn btn-success btn-sm" onclick="reviewHelperVerification('${h.id}','approve')">✅ Approve Verification</button>
-              <button class="btn btn-danger btn-sm" onclick="reviewHelperVerification('${h.id}','reject')">❌ Reject</button>
-              <button class="btn btn-warning btn-sm" onclick="reviewHelperVerification('${h.id}','info')">❓ Request Info</button>
+              <button class="btn btn-success btn-sm" onclick="reviewHelperVerification(${jsArg(h.id)},'approve')">✅ Approve Verification</button>
+              <button class="btn btn-danger btn-sm" onclick="reviewHelperVerification(${jsArg(h.id)},'reject')">❌ Reject</button>
+              <button class="btn btn-warning btn-sm" onclick="reviewHelperVerification(${jsArg(h.id)},'info')">❓ Request Info</button>
             </div>
           ` : ''}
         </div>
@@ -3509,11 +3543,11 @@ function viewHelper(id) {
       ${mf('Rating', h.rating ? `⭐ ${Number(h.rating).toFixed(1)} (${h.totalRatings || 0} reviews)` : 'No ratings yet')}
       ${mf('Completed Tasks', helperCompletedTasks(h))}
       ${mf('Total Earnings', `₹${Number(h.totalEarnings || 0).toLocaleString('en-IN')}`)}
-      ${mf('Community Trust Index', `<strong style="font-size:16px">${(typeof h.communityTrustIndex === 'number' ? h.communityTrustIndex : 49)}</strong>/100` +
-        (h.ctiBreakdown ? ` <span class="user-meta">(calculated ${h.ctiCalculated != null ? h.ctiCalculated : '—'}${(h.ctiModerationTotal ? ` ${h.ctiModerationTotal > 0 ? '+' : ''}${h.ctiModerationTotal} moderation` : '')})</span>` : ''))}
+      ${mfRaw('Community Trust Index', `<strong style="font-size:16px">${(typeof h.communityTrustIndex === 'number' ? h.communityTrustIndex : 49)}</strong>/100` +
+        (h.ctiBreakdown ? ` <span class="user-meta">(calculated ${esc(h.ctiCalculated != null ? h.ctiCalculated : '—')}${(h.ctiModerationTotal ? ` ${h.ctiModerationTotal > 0 ? '+' : ''}${esc(h.ctiModerationTotal)} moderation` : '')})</span>` : ''))}
       <div class="modal-field" style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary btn-sm" onclick="openCTIAdjust('helper','${h.id}','${(h.name || '').replace(/'/g, '')}','')">🎯 Adjust CTI</button>
-        <button class="btn btn-ghost btn-sm" onclick="openCTIHistory('helper','${h.id}','${(h.name || '').replace(/'/g, '')}')">🕑 CTI History</button>
+        <button class="btn btn-primary btn-sm" onclick="openCTIAdjust('helper',${jsArg(h.id)},${jsArg((h.name || '').replace(/'/g, ''))},'')">🎯 Adjust CTI</button>
+        <button class="btn btn-ghost btn-sm" onclick="openCTIHistory('helper',${jsArg(h.id)},${jsArg((h.name || '').replace(/'/g, ''))})">🕑 CTI History</button>
       </div>
       ${mf('Repeat Users', h.repeatUsers || 0)}
       ${h.cancellationRate ? mf('Cancellation Rate', `${Math.round((h.cancellationRate || 0) * 100)}%`) : ''}
@@ -3530,10 +3564,10 @@ function viewHelper(id) {
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
       ${h.status === 'pending' ?
-        `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','approve')">✅ Approve</button>
-         <button class="btn btn-danger btn-sm" onclick="helperAction('${h.id}','reject')">❌ Reject</button>` :
-        `${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction('${h.id}','suspend')">⚠️ Suspend</button>`}
-         ${h.isBlocked ? `<button class="btn btn-success btn-sm" onclick="helperAction('${h.id}','unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="helperAction('${h.id}','block')">🚫 Block</button>`}`}
+        `<button class="btn btn-success btn-sm" onclick="helperAction(${jsArg(h.id)},'approve')">✅ Approve</button>
+         <button class="btn btn-danger btn-sm" onclick="helperAction(${jsArg(h.id)},'reject')">❌ Reject</button>` :
+        `${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction(${jsArg(h.id)},'unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction(${jsArg(h.id)},'suspend')">⚠️ Suspend</button>`}
+         ${h.isBlocked ? `<button class="btn btn-success btn-sm" onclick="helperAction(${jsArg(h.id)},'unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="helperAction(${jsArg(h.id)},'block')">🚫 Block</button>`}`}
     </div>`
   );
 }
@@ -3620,13 +3654,13 @@ function renderVerification() {
   document.getElementById('verification-table').innerHTML = f.length === 0 ? empty('✅','No verifications','All caught up!') :
     `<table class="table"><thead><tr><th>Helper</th><th>Phone</th><th>Method</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(h => {
       const s = vs(h) || 'not_submitted';
-      const badge = `<span class="badge badge-${s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : s === 'info_requested' ? 'warning' : 'pending'}">${s.replace('_',' ')}</span>`;
+      const badge = `<span class="badge badge-${s === 'verified' ? 'approved' : s === 'rejected' ? 'rejected' : s === 'info_requested' ? 'warning' : 'pending'}">${esc(s.replace('_',' '))}</span>`;
       // Show actual ID type if available (new flow → legacy), otherwise method.
       const idType = h.verificationRequest?.idProofType || h.idProof?.type;
       const idLabels = { aadhaar: 'Aadhaar', voter_id: 'Voter ID', driving_license: 'Driving License' };
       const method = idType ? (idLabels[idType] || idType) : (h.verificationMethod || 'Aadhaar');
       const dateVal = h.verificationRequest?.submittedAt || h.verifiedAt || h.createdAt;
-      return `<tr><td>${h.name || '—'}</td><td>${h.phone || '—'}</td><td>${method}</td><td>${badge}</td><td>${fDate(dateVal)}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">View</button></td></tr>`;
+      return `<tr><td>${esc(h.name || '—')}</td><td>${esc(h.phone || '—')}</td><td>${esc(method)}</td><td>${badge}</td><td>${fDate(dateVal)}</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper(${jsArg(h.id)})">View</button></td></tr>`;
     }).join('') + `</tbody></table>`;
 }
 
@@ -3638,16 +3672,16 @@ function renderAlerts() {
   document.getElementById('alerts-table').innerHTML = f.length === 0 ? empty('🚨','No alerts','No alerts match this filter') :
     `<table class="table"><thead><tr><th>Alert</th><th>Type</th><th>Urgency</th><th>Submitter</th><th>Districts</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>` + f.map(a => {
       const urgency = a.urgency || 'low';
-      const resubmitFlag = a.status === 'resubmitted' || (a.resubmissionCount && a.resubmissionCount > 0) ? ` <span class="badge badge-resubmitted" style="font-size:9px">🔄 v${a.version || 2}</span>` : '';
+      const resubmitFlag = a.status === 'resubmitted' || (a.resubmissionCount && a.resubmissionCount > 0) ? ` <span class="badge badge-resubmitted" style="font-size:9px">🔄 v${esc(a.version || 2)}</span>` : '';
       return `<tr>
-        <td><strong>${a.title || 'Untitled'}</strong>${resubmitFlag}</td>
-        <td><span class="badge badge-gray">${(a.alertType || '—').replace('_', ' ')}</span></td>
-        <td><span class="badge badge-${urgency}">${urgency}</span></td>
-        <td>${a.contactName || a.userName || '—'}<br><span class="user-meta">${a.contactPhone || ''}</span></td>
-        <td>${(a.targetDistricts || []).slice(0, 2).join(', ')}${(a.targetDistricts || []).length > 2 ? '...' : ''}</td>
-        <td><span class="badge badge-${a.status || 'pending'}">${(a.status || 'pending').replace('_', ' ')}</span></td>
+        <td><strong>${esc(a.title || 'Untitled')}</strong>${resubmitFlag}</td>
+        <td><span class="badge badge-gray">${esc((a.alertType || '—').replace('_', ' '))}</span></td>
+        <td><span class="badge badge-${esc(urgency)}">${esc(urgency)}</span></td>
+        <td>${esc(a.contactName || a.userName || '—')}<br><span class="user-meta">${esc(a.contactPhone || '')}</span></td>
+        <td>${esc((a.targetDistricts || []).slice(0, 2).join(', '))}${(a.targetDistricts || []).length > 2 ? '...' : ''}</td>
+        <td><span class="badge badge-${esc(a.status || 'pending')}">${esc((a.status || 'pending').replace('_', ' '))}</span></td>
         <td>${fDate(a.createdAt)}</td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewAlert('${a.id}')">Review</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewAlert(${jsArg(a.id)})">Review</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 }
@@ -3662,23 +3696,23 @@ function viewAlert(id) {
   }
   if (a.missingVehicle) {
     const mv = a.missingVehicle;
-    extra += `<div class="modal-section-header">🚗 Missing Vehicle</div>${mf('Vehicle', `${mv.brand || ''} ${mv.model || ''} ${mv.variant || ''}`)}${mf('Type / Year', `${mv.type || '—'} / ${mv.year || '—'}`)}${mf('Color', mv.color || '—')}${mf('License Plate', `<strong>${mv.plate || '—'}</strong>`)}${mv.vin ? mf('VIN', mv.vin) : ''}${mv.damage ? mf('Damage/Mods', mv.damage) : ''}${mf('Last Seen', `${mv.lastSeenDate || '—'} at ${mv.lastSeenTime || '—'}`)}${mf('Last Seen Location', mv.lastSeenLocation || '—')}`;
+    extra += `<div class="modal-section-header">🚗 Missing Vehicle</div>${mf('Vehicle', `${mv.brand || ''} ${mv.model || ''} ${mv.variant || ''}`)}${mf('Type / Year', `${mv.type || '—'} / ${mv.year || '—'}`)}${mf('Color', mv.color || '—')}${mfRaw('License Plate', `<strong>${esc(mv.plate || '—')}</strong>`)}${mv.vin ? mf('VIN', mv.vin) : ''}${mv.damage ? mf('Damage/Mods', mv.damage) : ''}${mf('Last Seen', `${mv.lastSeenDate || '—'} at ${mv.lastSeenTime || '—'}`)}${mf('Last Seen Location', mv.lastSeenLocation || '—')}`;
   }
   if (a.missingItem) {
     const mi = a.missingItem;
     extra += `<div class="modal-section-header">📦 Missing Item</div>${mf('Type', mi.type || '—')}${mi.brand ? mf('Brand', mi.brand) : ''}${mi.color ? mf('Color', mi.color) : ''}${mi.serial ? mf('Serial', mi.serial) : ''}${mf('Description', mi.description || '—')}${mf('Last Seen', `${mi.lastSeenDate || '—'} at ${mi.lastSeenTime || '—'}`)}`;
   }
   const photos = a.photoUrls || [];
-  const photosHtml = photos.length > 0 ? `<div class="modal-field"><div class="modal-label">Photos (${photos.length})</div><div class="modal-photos lb-gallery">${photos.map(p => `<img class="lb-thumb" src="${p}"/>`).join('')}</div></div>` : '';
-  const firHtml = a.firDocumentUrl ? `${mf('FIR Number', a.firNumber || '—')}${mf('Police Station', a.policeStation || '—')}${mf('FIR Date', a.firDate || '—')}${mf('FIR Document', `<a href="${a.firDocumentUrl}" target="_blank" style="color:var(--primary);font-weight:700">📄 View FIR Copy</a>`)}` : '';
+  const photosHtml = photos.length > 0 ? `<div class="modal-field"><div class="modal-label">Photos (${photos.length})</div><div class="modal-photos lb-gallery">${photos.map(p => `<img class="lb-thumb" src="${safeUrl(p)}"/>`).join('')}</div></div>` : '';
+  const firHtml = a.firDocumentUrl ? `${mf('FIR Number', a.firNumber || '—')}${mf('Police Station', a.policeStation || '—')}${mf('FIR Date', a.firDate || '—')}${mfRaw('FIR Document', `<a href="${safeUrl(a.firDocumentUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--primary);font-weight:700">📄 View FIR Copy</a>`)}` : '';
 
   showModal(
-    `<div class="modal-header"><div class="modal-title">🚨 ${a.title || 'Alert'}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">🚨 ${esc(a.title || 'Alert')}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      ${a.status === 'resubmitted' ? `<div style="background:var(--info-light);padding:12px;border-radius:10px;margin-bottom:16px;border-left:4px solid var(--info)"><div style="font-weight:800;color:var(--info);font-size:14px">🔄 Resubmitted Alert${a.resubmissionCount ? ` (Attempt ${a.resubmissionCount + 1})` : ''}</div><div style="font-size:12px;color:var(--text-sec);margin-top:4px">User updated this alert with new information after your request. Resubmitted on ${fDate(a.resubmittedAt)}.</div></div>` : ''}
+      ${a.status === 'resubmitted' ? `<div style="background:var(--info-light);padding:12px;border-radius:10px;margin-bottom:16px;border-left:4px solid var(--info)"><div style="font-weight:800;color:var(--info);font-size:14px">🔄 Resubmitted Alert${a.resubmissionCount ? ` (Attempt ${esc(a.resubmissionCount + 1)})` : ''}</div><div style="font-size:12px;color:var(--text-sec);margin-top:4px">User updated this alert with new information after your request. Resubmitted on ${fDate(a.resubmittedAt)}.</div></div>` : ''}
       ${mf('Type', (a.alertType||'—').replace('_',' '))}
-      ${mf('Urgency', `<span class="badge badge-${a.urgency||'low'}">${a.urgency||'—'}</span>`)}
-      ${mf('Status', `<span class="badge badge-${a.status||'pending'}">${(a.status||'pending').replace('_',' ')}</span>`)}
+      ${mfRaw('Urgency', `<span class="badge badge-${esc(a.urgency||'low')}">${esc(a.urgency||'—')}</span>`)}
+      ${mfRaw('Status', `<span class="badge badge-${esc(a.status||'pending')}">${esc((a.status||'pending').replace('_',' '))}</span>`)}
       ${a.version && a.version > 1 ? mf('Version', `v${a.version} (Resubmitted ${a.resubmissionCount} time${a.resubmissionCount !== 1 ? 's' : ''})`) : ''}
       ${mf('Submitter', `${a.contactName || a.userName || '—'} (${a.contactPhone || a.userPhone || '—'})`)}
       ${mf('Audience', a.audienceType || 'both')}
@@ -3693,9 +3727,9 @@ function viewAlert(id) {
     </div>
     <div class="modal-footer">
       ${(a.status||'pending') === 'pending' || a.status === 'resubmitted' ?
-        `<button class="btn btn-danger btn-sm" onclick="rejectAlert('${a.id}')">❌ Reject</button>
-         <button class="btn btn-warning btn-sm" onclick="requestAlertInfo('${a.id}')">❓ Request Info</button>
-         <button class="btn btn-success btn-sm" onclick="approveAlert('${a.id}')">✅ Approve & Broadcast</button>` :
+        `<button class="btn btn-danger btn-sm" onclick="rejectAlert(${jsArg(a.id)})">❌ Reject</button>
+         <button class="btn btn-warning btn-sm" onclick="requestAlertInfo(${jsArg(a.id)})">❓ Request Info</button>
+         <button class="btn btn-success btn-sm" onclick="approveAlert(${jsArg(a.id)})">✅ Approve & Broadcast</button>` :
         `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`}
     </div>`
   );
@@ -3785,18 +3819,18 @@ function renderReports() {
       const primaryBadge = r.primaryType === 'complaint' ? '<span class="badge badge-danger">🗣️ Complaint</span>' : '<span class="badge badge-info">⚙️ Technical</span>';
       const severity = r.severity || r.priority || 'medium';
       return `<tr>
-        <td><code style="font-weight:700">${r.ticketId || r.id.slice(0,6).toUpperCase()}</code></td>
-        <td>${r.reporterName || '—'}<br><span class="user-meta">${typeBadge} ${r.reporterPhone || ''}</span></td>
+        <td><code style="font-weight:700">${esc(r.ticketId || r.id.slice(0,6).toUpperCase())}</code></td>
+        <td>${esc(r.reporterName || '—')}<br><span class="user-meta">${typeBadge} ${esc(r.reporterPhone || '')}</span></td>
         <td>${r.reportedUserId
-              ? `${r.reportedUserName || '—'}<br><span class="user-meta"><code style="font-weight:700">${r.reportedUserPublicId || r.reportedUserId}</code></span>`
+              ? `${esc(r.reportedUserName || '—')}<br><span class="user-meta"><code style="font-weight:700">${esc(r.reportedUserPublicId || r.reportedUserId)}</code></span>`
               : '<span class="user-meta">—</span>'}</td>
         <td>${primaryBadge}</td>
-        <td>${r.categoryLabel || (r.category || '—').replace('_',' ')}</td>
-        <td>${(r.subject || '—').substring(0, 50)}</td>
-        <td><span class="badge badge-${severity}">${severity}</span></td>
-        <td><span class="badge badge-${r.status || 'open'}">${(r.status || 'open').replace('_',' ')}</span></td>
+        <td>${esc(r.categoryLabel || (r.category || '—').replace('_',' '))}</td>
+        <td>${esc((r.subject || '—').substring(0, 50))}</td>
+        <td><span class="badge badge-${esc(severity)}">${esc(severity)}</span></td>
+        <td><span class="badge badge-${esc(r.status || 'open')}">${esc((r.status || 'open').replace('_',' '))}</span></td>
         <td>${fDate(r.createdAt)}</td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewReport('${r.id}')">Handle</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewReport(${jsArg(r.id)})">Handle</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 }
@@ -3810,40 +3844,40 @@ function viewReport(id) {
   const currentPriority = r.priority || r.severity || 'medium';
   const primaryBadge = r.primaryType === 'complaint' ? '<span class="badge badge-danger">🗣️ Complaint</span>' : r.primaryType === 'technical' ? '<span class="badge badge-info">⚙️ Technical Error</span>' : '<span class="badge badge-gray">— Unclassified</span>';
   showModal(
-    `<div class="modal-header"><div class="modal-title">🎫 ${r.ticketId || 'Ticket #' + r.id.slice(0,6)}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">🎫 ${esc(r.ticketId || 'Ticket #' + r.id.slice(0,6))}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <div class="modal-section-header">📋 Classification</div>
-      ${mf('Primary Type', primaryBadge)}
+      ${mfRaw('Primary Type', primaryBadge)}
       ${mf('Category', r.categoryLabel || (r.category || '—').replace('_', ' ').toUpperCase())}
-      ${mf('Severity', `<span class="badge badge-${r.severity || r.priority || 'medium'}">${(r.severity || r.priority || 'medium').toUpperCase()}</span>`)}
+      ${mfRaw('Severity', `<span class="badge badge-${esc(r.severity || r.priority || 'medium')}">${esc((r.severity || r.priority || 'medium').toUpperCase())}</span>`)}
       ${r.slaTarget ? mf('SLA Target', `${r.slaTarget} hours from submission`) : ''}
       <div class="modal-section-header">👤 Reporter Details</div>
       ${mf('Type', r.reporterType === 'helper' ? '🛡️ Helper' : '👥 User')}
-      ${mf('Name', `<strong>${r.reporterName || '—'}</strong>`)}
-      ${mf('Account ID', `<code>${r.reporterId || '—'}</code>`)}
+      ${mfRaw('Name', `<strong>${esc(r.reporterName || '—')}</strong>`)}
+      ${mfRaw('Account ID', `<code>${esc(r.reporterId || '—')}</code>`)}
       ${mf('Phone', r.reporterPhone || '—')}
       ${r.reporterEmail ? mf('Email', r.reporterEmail) : ''}
-      ${mf('Public ID', `<code>${r.reporterPublicId || '—'}</code>`)}
+      ${mfRaw('Public ID', `<code>${esc(r.reporterPublicId || '—')}</code>`)}
       ${r.reporterDistrict ? mf('District', r.reporterDistrict) : ''}
       ${r.reportedUserId ? `
       <div class="modal-section-header">🚩 Reported Party</div>
       ${mf('Type', r.reportedUserRole === 'user' ? '👥 User' : '🛡️ Helper')}
-      ${mf('Name', `<strong>${r.reportedUserName || '—'}</strong>`)}
-      ${mf('Public ID', `<code style="font-size:14px;font-weight:800">${r.reportedUserPublicId || '—'}</code>`)}
-      ${mf('Account ID', `<code>${r.reportedUserId}</code>`)}
+      ${mfRaw('Name', `<strong>${esc(r.reportedUserName || '—')}</strong>`)}
+      ${mfRaw('Public ID', `<code style="font-size:14px;font-weight:800">${esc(r.reportedUserPublicId || '—')}</code>`)}
+      ${mfRaw('Account ID', `<code>${esc(r.reportedUserId)}</code>`)}
       ${mf('Phone', r.reportedUserPhone || '—')}
       ${r.reportedUserDistrict ? mf('District', r.reportedUserDistrict) : ''}
       <div class="modal-field" style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm"
-          onclick="openReportedParty('${r.reportedUserId}','${r.reportedUserRole || 'helper'}')">
+          onclick="openReportedParty(${jsArg(r.reportedUserId)},${jsArg(r.reportedUserRole || 'helper')})">
           🔍 Open this ${r.reportedUserRole === 'user' ? 'user' : 'helper'}
         </button>
         <button class="btn btn-primary btn-sm"
-          onclick="openCTIAdjust('${r.reportedUserRole || 'helper'}','${r.reportedUserId}','${(r.reportedUserName || '').replace(/'/g, '')}','${id}')">
+          onclick="openCTIAdjust(${jsArg(r.reportedUserRole || 'helper')},${jsArg(r.reportedUserId)},${jsArg((r.reportedUserName || '').replace(/'/g, ''))},${jsArg(id)})">
           🎯 Adjust CTI
         </button>
         <button class="btn btn-ghost btn-sm"
-          onclick="openCTIHistory('${r.reportedUserRole || 'helper'}','${r.reportedUserId}','${(r.reportedUserName || '').replace(/'/g, '')}')">
+          onclick="openCTIHistory(${jsArg(r.reportedUserRole || 'helper')},${jsArg(r.reportedUserId)},${jsArg((r.reportedUserName || '').replace(/'/g, ''))})">
           🕑 CTI History
         </button>
       </div>
@@ -3853,9 +3887,9 @@ function viewReport(id) {
       <div class="modal-section-header">🚩 Reported Party</div>
       <div class="modal-field"><span class="user-meta">General report — no specific account was named.</span></div>`}
       <div class="modal-section-header">🐛 Issue Details</div>
-      ${mf('Subject', `<strong>${r.subject || '—'}</strong>`)}
-      ${mf('Description', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${r.description || '—'}</div>`)}
-      ${r.screenshotUrl ? `<div class="modal-field"><div class="modal-label">Screenshot</div><img class="lb-thumb" src="${r.screenshotUrl}" style="max-width:100%;max-height:400px;border-radius:8px;margin-top:6px;display:block"/><div style="font-size:11px;color:var(--text-mute);margin-top:4px">🔍 Click to view full size</div></div>` : ''}
+      ${mfRaw('Subject', `<strong>${esc(r.subject || '—')}</strong>`)}
+      ${mfRaw('Description', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${esc(r.description || '—')}</div>`)}
+      ${r.screenshotUrl ? `<div class="modal-field"><div class="modal-label">Screenshot</div><img class="lb-thumb" src="${safeUrl(r.screenshotUrl)}" style="max-width:100%;max-height:400px;border-radius:8px;margin-top:6px;display:block"/><div style="font-size:11px;color:var(--text-mute);margin-top:4px">🔍 Click to view full size</div></div>` : ''}
       <div class="modal-section-header">📱 System Info</div>
       ${mf('Platform', r.platform || '—')}
       ${mf('Device', r.deviceInfo || '—')}
@@ -3864,14 +3898,14 @@ function viewReport(id) {
       <div class="modal-section-header">⚙️ Admin Actions</div>
       <div class="modal-field"><div class="modal-label">Priority</div><select id="rpt-priority" class="form-select">${priorities.map(p => `<option value="${p}"${p === currentPriority ? ' selected' : ''}>${p.toUpperCase()}</option>`).join('')}</select></div>
       <div class="modal-field"><div class="modal-label">Status</div><select id="rpt-status" class="form-select">${statuses.map(s => `<option value="${s}"${s === currentStatus ? ' selected' : ''}>${s.replace('_', ' ').toUpperCase()}</option>`).join('')}</select></div>
-      <div class="modal-field"><div class="modal-label">Assigned To (Optional)</div><input type="text" id="rpt-assigned" class="form-input" value="${r.assignedTo || ''}" placeholder="e.g. support@team.com"/></div>
-      <div class="modal-field"><div class="modal-label">Internal Notes (Admin Only — not shown to user)</div><textarea id="rpt-notes" class="form-textarea" placeholder="Internal investigation notes...">${r.internalNotes || ''}</textarea></div>
-      <div class="modal-field"><div class="modal-label">Reply to Reporter (Visible to user)</div><textarea id="rpt-reply" class="form-textarea" placeholder="Type your response to the reporter...">${r.adminReply || ''}</textarea></div>
-      ${r.adminReply ? `<div style="font-size:11px;color:var(--text-mute);margin-top:8px"><i>Last reply by ${r.repliedBy || 'Admin'}: ${fDate(r.repliedAt)}</i></div>` : ''}
+      <div class="modal-field"><div class="modal-label">Assigned To (Optional)</div><input type="text" id="rpt-assigned" class="form-input" value="${esc(r.assignedTo || '')}" placeholder="e.g. support@team.com"/></div>
+      <div class="modal-field"><div class="modal-label">Internal Notes (Admin Only — not shown to user)</div><textarea id="rpt-notes" class="form-textarea" placeholder="Internal investigation notes...">${esc(r.internalNotes || '')}</textarea></div>
+      <div class="modal-field"><div class="modal-label">Reply to Reporter (Visible to user)</div><textarea id="rpt-reply" class="form-textarea" placeholder="Type your response to the reporter...">${esc(r.adminReply || '')}</textarea></div>
+      ${r.adminReply ? `<div style="font-size:11px;color:var(--text-mute);margin-top:8px"><i>Last reply by ${esc(r.repliedBy || 'Admin')}: ${fDate(r.repliedAt)}</i></div>` : ''}
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveReport('${r.id}')">💾 Save & Notify Reporter</button>
+      <button class="btn btn-primary" onclick="saveReport(${jsArg(r.id)})">💾 Save & Notify Reporter</button>
     </div>`
   );
 }
@@ -3903,7 +3937,7 @@ function saveReport(id) {
 function renderReviews() {
   document.getElementById('reviews-table').innerHTML = reviews.length === 0 ? empty('⭐','No reviews','Reviews appear here') :
     `<table class="table"><thead><tr><th>Reviewer</th><th>Helper</th><th>Rating</th><th>Comment</th><th>Date</th></tr></thead><tbody>` + reviews.map(r => `
-      <tr><td>${r.userName || '—'}</td><td><code>${(r.helperId || '').slice(0, 14)}</code></td><td style="color:#F59E0B">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</td><td>${r.comment || '—'}</td><td>${fDate(r.createdAt)}</td></tr>
+      <tr><td>${esc(r.userName || '—')}</td><td><code>${esc((r.helperId || '').slice(0, 14))}</code></td><td style="color:#F59E0B">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</td><td>${esc(r.comment || '—')}</td><td>${fDate(r.createdAt)}</td></tr>
     `).join('') + `</tbody></table>`;
 }
 
@@ -3928,14 +3962,14 @@ function renderUserReviews() {
       const badge = status === 'active' ? 'badge-success' : status === 'flagged' ? 'badge-warning' : 'badge-danger';
       const stars = '★'.repeat(r.rating||0) + '☆'.repeat(5-(r.rating||0));
       return `<tr>
-        <td>${r.helperName||'—'}<br><span class="user-meta"><code>${(r.helperId||'').slice(0,10)}</code></span></td>
-        <td><code>${(r.userId||'').slice(0,12)}</code></td>
+        <td>${esc(r.helperName||'—')}<br><span class="user-meta"><code>${esc((r.helperId||'').slice(0,10))}</code></span></td>
+        <td><code>${esc((r.userId||'').slice(0,12))}</code></td>
         <td style="color:#F59E0B">${stars} <span style="color:var(--text-mute)">${Number(r.rating||0).toFixed(1)}</span></td>
-        <td>${(r.comment||'—').substring(0,60)}</td>
-        <td><span class="badge ${badge}">${status}</span></td>
-        <td>${r.userReported ? '<span class="badge badge-danger">🚩 User-reported</span> ' : ''}${(r.flaggedReasons||[]).length ? '<span class="badge badge-warning">'+(r.flaggedReasons||[]).length+'</span>' : (r.userReported ? '' : '—')}</td>
+        <td>${esc((r.comment||'—').substring(0,60))}</td>
+        <td><span class="badge ${badge}">${esc(status)}</span></td>
+        <td>${r.userReported ? '<span class="badge badge-danger">🚩 User-reported</span> ' : ''}${(r.flaggedReasons||[]).length ? '<span class="badge badge-warning">'+esc((r.flaggedReasons||[]).length)+'</span>' : (r.userReported ? '' : '—')}</td>
         <td>${fDate(r.submittedAt)}</td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewUserReview('${r.id}')">Review</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewUserReview(${jsArg(r.id)})">Review</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 }
@@ -3947,11 +3981,11 @@ function viewUserReview(id) {
   const sb = status==='active'?'badge-success':status==='flagged'?'badge-warning':'badge-danger';
   showModal(`<div class="modal-header"><div class="modal-title">🧑‍⚖️ User Review</div><button class="modal-close" onclick="closeModal()">×</button></div>
   <div class="modal-body">
-    ${mf('Reviewer (Helper)', `${r.helperName||'—'} <code>${r.helperId||''}</code>`)}
-    ${mf('Target User', `<code>${r.userId||''}</code>`)}
+    ${mfRaw('Reviewer (Helper)', `${esc(r.helperName||'—')} <code>${esc(r.helperId||'')}</code>`)}
+    ${mfRaw('Target User', `<code>${esc(r.userId||'')}</code>`)}
     ${mf('Rating', `⭐ ${Number(r.rating||0).toFixed(1)} / 5`)}
     ${mf('Comment', r.comment || '—')}
-    ${mf('Interaction', `${r.interactionType||'—'} · <code>${r.requestId||''}</code>`)}
+    ${mfRaw('Interaction', `${esc(r.interactionType||'—')} · <code>${esc(r.requestId||'')}</code>`)}
     <div class="modal-section-header">Behavior breakdown</div>
     ${mf('Communication', b.communication ?? '—')}
     ${mf('Punctuality', b.punctuality ?? '—')}
@@ -3959,7 +3993,7 @@ function viewUserReview(id) {
     ${mf('Respectful behavior', b.respectfulBehavior ?? '—')}
     ${mf('Cooperation', b.cooperation ?? '—')}
     <div class="modal-section-header">Moderation</div>
-    ${mf('Status', `<span class="badge ${sb}">${status}</span>`)}
+    ${mfRaw('Status', `<span class="badge ${sb}">${esc(status)}</span>`)}
     ${(r.flaggedReasons||[]).length ? mf('Auto-flag reasons', (r.flaggedReasons||[]).join(', ')) : ''}
     ${r.userReported ? mf('🚩 User-reported', `${r.userReportReason || 'No reason given'}${r.userReportedAt ? ' · ' + fDate(r.userReportedAt) : ''}`) : ''}
     ${r.removedBy ? mf('Removed by', `${r.removedBy} · ${r.removalReason||''}`) : ''}
@@ -3967,9 +4001,9 @@ function viewUserReview(id) {
   </div>
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="closeModal()">Close</button>
-    ${status!=='active' ? `<button class="btn btn-success btn-sm" onclick="moderateUserReview('${r.id}','active')">✅ Restore</button>` : ''}
-    ${status!=='flagged' ? `<button class="btn btn-warning btn-sm" onclick="moderateUserReview('${r.id}','flagged')">🚩 Flag</button>` : ''}
-    ${status!=='removed' ? `<button class="btn btn-danger btn-sm" onclick="moderateUserReview('${r.id}','removed')">🗑️ Remove</button>` : ''}
+    ${status!=='active' ? `<button class="btn btn-success btn-sm" onclick="moderateUserReview(${jsArg(r.id)},'active')">✅ Restore</button>` : ''}
+    ${status!=='flagged' ? `<button class="btn btn-warning btn-sm" onclick="moderateUserReview(${jsArg(r.id)},'flagged')">🚩 Flag</button>` : ''}
+    ${status!=='removed' ? `<button class="btn btn-danger btn-sm" onclick="moderateUserReview(${jsArg(r.id)},'removed')">🗑️ Remove</button>` : ''}
   </div>`);
 }
 
@@ -4033,7 +4067,7 @@ async function recomputeUserAggregates(userId) {
 function renderChats() {
   document.getElementById('chats-table').innerHTML = chats.length === 0 ? empty('💬','No chats','No conversations yet') :
     `<table class="table"><thead><tr><th>Participants</th><th>Last Message</th><th>Last Activity</th></tr></thead><tbody>` + chats.map(c => `
-      <tr><td>${c.helperName || '—'} ↔ <code>${(c.userId || '').slice(0, 8)}</code></td><td>${(c.lastMessage || '—').substring(0, 60)}</td><td>${fDate(c.lastMessageAt)}</td></tr>
+      <tr><td>${esc(c.helperName || '—')} ↔ <code>${esc((c.userId || '').slice(0, 8))}</code></td><td>${esc((c.lastMessage || '—').substring(0, 60))}</td><td>${fDate(c.lastMessageAt)}</td></tr>
     `).join('') + `</tbody></table>`;
 }
 
@@ -4046,13 +4080,13 @@ function renderAppeals() {
       const statusBadge = { submitted: '<span class="badge badge-open">📬 Submitted</span>', under_review: '<span class="badge badge-in_review">👀 Under Review</span>', approved: '<span class="badge badge-approved">✅ Approved</span>', rejected: '<span class="badge badge-rejected">❌ Rejected</span>' }[a.status || 'submitted'];
       const typeBadge = a.accountType === 'helper' ? '<span class="badge badge-purple">🛡️ Helper</span>' : '<span class="badge badge-primary">👥 User</span>';
       return `<tr>
-        <td><code>${a.appealId || a.id.slice(0,6).toUpperCase()}</code></td>
-        <td>${a.accountName || '—'}<br><span class="user-meta">${a.accountPhone || ''}</span></td>
-        <td>${typeBadge}<br><span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${a.statusType || '—'}</span></td>
-        <td>${(a.subject || '—').substring(0, 50)}</td>
+        <td><code>${esc(a.appealId || a.id.slice(0,6).toUpperCase())}</code></td>
+        <td>${esc(a.accountName || '—')}<br><span class="user-meta">${esc(a.accountPhone || '')}</span></td>
+        <td>${typeBadge}<br><span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${esc(a.statusType || '—')}</span></td>
+        <td>${esc((a.subject || '—').substring(0, 50))}</td>
         <td>${statusBadge}</td>
         <td>${fDate(a.createdAt)}</td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewAppeal('${a.id}')">Review</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewAppeal(${jsArg(a.id)})">Review</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 }
@@ -4062,31 +4096,31 @@ function viewAppeal(id) {
   const a = appeals.find(x => x.id === id); if (!a) return;
   const isPending = a.status === 'submitted' || a.status === 'under_review';
   showModal(
-    `<div class="modal-header"><div class="modal-title">🙋 Appeal #${a.appealId || a.id.slice(0,6)}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">🙋 Appeal #${esc(a.appealId || a.id.slice(0,6))}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       ${mf('Account', `${a.accountType === 'helper' ? '🛡️ Helper' : '👥 User'}: ${a.accountName || '—'}`)}
       ${mf('Contact', a.accountPhone || '—')}
-      ${mf('Account ID', `<code>${a.accountId || '—'}</code>`)}
-      ${mf('Appealing Against', a.statusType === 'cti_adjustment'
+      ${mfRaw('Account ID', `<code>${esc(a.accountId || '—')}</code>`)}
+      ${mfRaw('Appealing Against', a.statusType === 'cti_adjustment'
           ? '<span class="badge badge-info">CTI adjustment</span>'
-          : `<span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${a.statusType || '—'}</span>`)}
+          : `<span class="badge badge-${a.statusType === 'blocked' ? 'blocked' : 'suspended'}">${esc(a.statusType || '—')}</span>`)}
       ${mf('Original Reason', a.originalReason || '—')}
-      ${a.statusType === 'cti_adjustment' && a.ctiAdjustmentId ? `<div class="modal-field"><button class="btn btn-secondary btn-sm" onclick="openCTIHistory('${a.accountType || 'helper'}','${a.accountId}','${(a.accountName || '').replace(/'/g, '')}')">🕑 View CTI history</button></div>` : ''}
+      ${a.statusType === 'cti_adjustment' && a.ctiAdjustmentId ? `<div class="modal-field"><button class="btn btn-secondary btn-sm" onclick="openCTIHistory(${jsArg(a.accountType || 'helper')},${jsArg(a.accountId)},${jsArg((a.accountName || '').replace(/'/g, ''))})">🕑 View CTI history</button></div>` : ''}
       <div class="modal-section-header">📝 Appeal Submission</div>
-      ${mf('Subject', `<strong>${a.subject || '—'}</strong>`)}
-      ${mf('Explanation', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${a.explanation || '—'}</div>`)}
+      ${mfRaw('Subject', `<strong>${esc(a.subject || '—')}</strong>`)}
+      ${mfRaw('Explanation', `<div style="background:var(--bg-alt);padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5">${esc(a.explanation || '—')}</div>`)}
       ${mf('Submitted', fDate(a.createdAt))}
-      ${mf('Current Status', `<span class="badge badge-${a.status === 'approved' ? 'approved' : a.status === 'rejected' ? 'rejected' : 'pending'}">${a.status || 'submitted'}</span>`)}
-      ${a.adminReply ? `<div class="modal-section-header">💬 Admin Reply</div><div style="background:var(--success-light);padding:12px;border-radius:8px;border-left:3px solid var(--success)"><div style="font-size:13px;color:var(--text);white-space:pre-wrap">${a.adminReply}</div><div style="font-size:11px;color:var(--text-mute);margin-top:6px">— ${a.repliedBy || 'Admin'} · ${fDate(a.repliedAt)}</div></div>` : ''}
+      ${mfRaw('Current Status', `<span class="badge badge-${a.status === 'approved' ? 'approved' : a.status === 'rejected' ? 'rejected' : 'pending'}">${esc(a.status || 'submitted')}</span>`)}
+      ${a.adminReply ? `<div class="modal-section-header">💬 Admin Reply</div><div style="background:var(--success-light);padding:12px;border-radius:8px;border-left:3px solid var(--success)"><div style="font-size:13px;color:var(--text);white-space:pre-wrap">${esc(a.adminReply)}</div><div style="font-size:11px;color:var(--text-mute);margin-top:6px">— ${esc(a.repliedBy || 'Admin')} · ${fDate(a.repliedAt)}</div></div>` : ''}
       ${isPending ? `<div class="modal-section-header">⚙️ Review Decision</div><div class="modal-field"><div class="modal-label">Reply to Appellant</div><textarea id="appeal-reply" class="form-textarea" placeholder="Explain your decision..."></textarea></div>` : ''}
     </div>
     <div class="modal-footer">
       ${isPending
         ? `<button class="btn btn-ghost" onclick="closeModal()">Close</button>` +
           (a.statusType === 'cti_adjustment' && a.ctiAdjustmentId
-            ? `<button class="btn btn-secondary" onclick="reverseCTIFromAppeal('${a.id}','${a.accountType || 'helper'}','${a.accountId}','${a.ctiAdjustmentId}')">↩ Reverse CTI</button>`
+            ? `<button class="btn btn-secondary" onclick="reverseCTIFromAppeal(${jsArg(a.id)},${jsArg(a.accountType || 'helper')},${jsArg(a.accountId)},${jsArg(a.ctiAdjustmentId)})">↩ Reverse CTI</button>`
             : '') +
-          `<button class="btn btn-danger" onclick="decideAppeal('${a.id}','rejected')">❌ Reject Appeal</button><button class="btn btn-success" onclick="decideAppeal('${a.id}','approved')">✅ Approve${a.statusType === 'cti_adjustment' ? '' : ' & Reinstate'}</button>`
+          `<button class="btn btn-danger" onclick="decideAppeal(${jsArg(a.id)},'rejected')">❌ Reject Appeal</button><button class="btn btn-success" onclick="decideAppeal(${jsArg(a.id)},'approved')">✅ Approve${a.statusType === 'cti_adjustment' ? '' : ' & Reinstate'}</button>`
         : `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`}
     </div>`
   );
@@ -4137,17 +4171,17 @@ function renderAgreements() {
       const statusBadges = { pending: '<span class="badge badge-pending">⏳ Pending</span>', accepted: '<span class="badge badge-approved">🔒 Locked</span>', rejected: '<span class="badge badge-rejected">❌ Rejected</span>', changes_requested: '<span class="badge badge-warning">✏️ Counter</span>', completed: '<span class="badge badge-info">🎉 Completed</span>', disputed: '<span class="badge badge-danger">⚠️ Disputed</span>', cancelled: '<span class="badge badge-gray">🚫 Cancelled</span>' };
       const statusBadge = statusBadges[a.status] || statusBadges.pending;
       const initiator = a.initiator === 'user' ? '👥 User' : '🛡️ Helper';
-      const versionTag = a.currentVersion > 1 ? ` <span class="badge badge-info" style="font-size:9px">v${a.currentVersion}</span>` : '';
+      const versionTag = a.currentVersion > 1 ? ` <span class="badge badge-info" style="font-size:9px">v${esc(a.currentVersion)}</span>` : '';
       return `<tr>
-        <td><code style="font-weight:700">${a.agreementId || a.id.slice(0,6).toUpperCase()}</code>${versionTag}</td>
+        <td><code style="font-weight:700">${esc(a.agreementId || a.id.slice(0,6).toUpperCase())}</code>${versionTag}</td>
         <td>${initiator}</td>
-        <td>${a.userName || '—'}<br><span class="user-meta">↔ ${a.helperName || '—'}</span></td>
-        <td>${(a.taskDescription || '—').substring(0, 40)}<br><span class="user-meta">${(a.category || '—')}</span></td>
-        <td>${a.date || '—'}<br><span class="user-meta">${a.startTime || '—'} · ${a.durationHours || '—'}h</span></td>
-        <td><strong>₹${parseFloat(a.amount || '0').toLocaleString('en-IN')}</strong><br><span class="user-meta">${a.paymentMethod || '—'}</span></td>
+        <td>${esc(a.userName || '—')}<br><span class="user-meta">↔ ${esc(a.helperName || '—')}</span></td>
+        <td>${esc((a.taskDescription || '—').substring(0, 40))}<br><span class="user-meta">${esc((a.category || '—'))}</span></td>
+        <td>${esc(a.date || '—')}<br><span class="user-meta">${esc(a.startTime || '—')} · ${esc(a.durationHours || '—')}h</span></td>
+        <td><strong>₹${parseFloat(a.amount || '0').toLocaleString('en-IN')}</strong><br><span class="user-meta">${esc(a.paymentMethod || '—')}</span></td>
         <td>${statusBadge}</td>
         <td>${fDate(a.createdAt)}</td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewAgreement('${a.id}')">View</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewAgreement(${jsArg(a.id)})">View</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 }
@@ -4186,7 +4220,7 @@ function renderWorkPosts() {
     { label: 'Active', val: workPostsData.filter(w => statusOf(w) === 'active').length, icon: '🟢', bg: 'success' },
     { label: 'Completed', val: workPostsData.filter(w => (w.status||'') === 'completed').length, icon: '🎉', bg: 'purple' },
     { label: 'Total Interest', val: workPostsData.reduce((s, w) => s + (w.interestedCount || 0), 0), icon: '🙋', bg: 'danger' },
-  ].map(s => `<div class="stat-card"><div class="stat-card-head"><div class="stat-label">${s.label}</div><div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div></div><div class="stat-value">${s.val}</div></div>`).join('');
+  ].map(s => `<div class="stat-card"><div class="stat-card-head"><div class="stat-label">${s.label}</div><div class="stat-icon" style="background:var(--${s.bg}-light);color:var(--${s.bg})">${s.icon}</div></div><div class="stat-value">${esc(s.val)}</div></div>`).join('');
 
   const badges = {
     active: '<span class="badge badge-approved">🟢 Active</span>',
@@ -4200,15 +4234,15 @@ function renderWorkPosts() {
 
   target.innerHTML = f.length === 0 ? empty('💼','No work posts','No posts match this filter') :
     `<table class="table"><thead><tr><th>Title</th><th>Posted by</th><th>Location</th><th>Category</th><th>Budget</th><th>Interest</th><th>Status</th><th>Posted</th><th>Actions</th></tr></thead><tbody>` + f.map(w => `<tr>
-      <td><strong>${w.title||'—'}</strong> ${urg[w.urgency]||''}</td>
-      <td>${w.userName || '—'}<br><span class="user-meta"><code>${w.userId || ''}</code></span></td>
-      <td>${[w.village, w.district].filter(Boolean).join(', ') || '—'}<br><span class="user-meta">${w.state || ''}</span></td>
-      <td>${w.category || '—'}</td>
-      <td>${budgetLabel(w)}</td>
-      <td>👁 ${w.viewsCount||0} · 🙋 ${w.interestedCount||0}</td>
+      <td><strong>${esc(w.title||'—')}</strong> ${urg[w.urgency]||''}</td>
+      <td>${esc(w.userName || '—')}<br><span class="user-meta"><code>${esc(w.userId || '')}</code></span></td>
+      <td>${esc([w.village, w.district].filter(Boolean).join(', ') || '—')}<br><span class="user-meta">${esc(w.state || '')}</span></td>
+      <td>${esc(w.category || '—')}</td>
+      <td>${esc(budgetLabel(w))}</td>
+      <td>👁 ${esc(w.viewsCount||0)} · 🙋 ${esc(w.interestedCount||0)}</td>
       <td>${badges[statusOf(w)] || badges.active}</td>
       <td>${fDate(w.createdAt)}</td>
-      <td><button class="btn btn-primary btn-sm" onclick="viewWorkPost('${w.id}')">View</button> <button class="btn btn-ghost btn-sm" onclick="toggleWorkFeatured('${w.id}')" title="Feature">${w.featured ? '★' : '☆'}</button> <button class="btn btn-danger btn-sm" onclick="removeWorkPost('${w.id}')">🗑️</button></td>
+      <td><button class="btn btn-primary btn-sm" onclick="viewWorkPost(${jsArg(w.id)})">View</button> <button class="btn btn-ghost btn-sm" onclick="toggleWorkFeatured(${jsArg(w.id)})" title="Feature">${w.featured ? '★' : '☆'}</button> <button class="btn btn-danger btn-sm" onclick="removeWorkPost(${jsArg(w.id)})">🗑️</button></td>
     </tr>`).join('') + `</tbody></table>`;
 }
 
@@ -4216,7 +4250,7 @@ async function viewWorkPost(id) {
   try { markRead('work', id); } catch {}
   const w = workPostsData.find(x => x.id === id); if (!w) return;
   showModal(
-    `<div class="modal-header"><div class="modal-title">💼 ${w.title || 'Work Post'}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">💼 ${esc(w.title || 'Work Post')}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <div class="modal-section-header">📝 Details</div>
       ${mf('Category', w.category || '—')}
@@ -4227,21 +4261,21 @@ async function viewWorkPost(id) {
       ${mf('Date required', w.dateTimeRequired ? new Date(w.dateTimeRequired).toLocaleString() : 'Flexible')}
       ${mf('Verification required', w.verificationRequired ? 'Yes' : 'No')}
       <div class="modal-section-header">👤 Poster</div>
-      ${mf('Name', `${w.userName || '—'}<br><code>${w.userId || ''}</code>`)}
+      ${mfRaw('Name', `${esc(w.userName || '—')}<br><code>${esc(w.userId || '')}</code>`)}
       <div class="modal-section-header">📍 Location</div>
       ${mf('Area', [w.village, w.district, w.state].filter(Boolean).join(', ') || '—')}
       ${mf('Visibility', (w.visibility && w.visibility.scope) || 'entire_area')}
-      ${(w.photos && w.photos.length) ? `<div class="modal-section-header">🖼 Photos</div><div style="display:flex;gap:8px;flex-wrap:wrap">${w.photos.map(p => `<img src="${p}" style="width:90px;height:90px;object-fit:cover;border-radius:8px" />`).join('')}</div>` : ''}
-      <div class="modal-section-header">🙋 Interested Helpers (${w.interestedCount || 0})</div>
+      ${(w.photos && w.photos.length) ? `<div class="modal-section-header">🖼 Photos</div><div style="display:flex;gap:8px;flex-wrap:wrap">${w.photos.map(p => `<img src="${safeUrl(p)}" style="width:90px;height:90px;object-fit:cover;border-radius:8px" />`).join('')}</div>` : ''}
+      <div class="modal-section-header">🙋 Interested Helpers (${esc(w.interestedCount || 0)})</div>
       <div id="work-interests">Loading…</div>
-      <div style="margin-top:16px"><button class="btn btn-danger" onclick="removeWorkPost('${w.id}')">🗑️ Remove Post</button></div>
+      <div style="margin-top:16px"><button class="btn btn-danger" onclick="removeWorkPost(${jsArg(w.id)})">🗑️ Remove Post</button></div>
     </div>`
   );
   try {
     const snap = await db.collection('workPosts').doc(id).collection('interests').get();
     const el = document.getElementById('work-interests'); if (!el) return;
     el.innerHTML = snap.empty ? '<span style="color:var(--text-mute)">No interested helpers yet.</span>' :
-      snap.docs.map(d => { const i = d.data(); return `<div style="background:var(--bg-alt);padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:12px"><strong>${i.helperName || 'Helper'}</strong> · ${i.status || 'interested'}${i.helperDistanceKm != null ? ' · ' + i.helperDistanceKm + ' km' : ''}${i.message ? `<br><span style="color:var(--text-mute)">"${i.message}"</span>` : ''}<br><code>${d.id}</code></div>`; }).join('');
+      snap.docs.map(d => { const i = d.data(); return `<div style="background:var(--bg-alt);padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:12px"><strong>${esc(i.helperName || 'Helper')}</strong> · ${esc(i.status || 'interested')}${i.helperDistanceKm != null ? ' · ' + esc(i.helperDistanceKm) + ' km' : ''}${i.message ? `<br><span style="color:var(--text-mute)">"${esc(i.message)}"</span>` : ''}<br><code>${esc(d.id)}</code></div>`; }).join('');
   } catch (e) { const el = document.getElementById('work-interests'); if (el) el.innerHTML = '<span style="color:var(--danger)">Could not load interests.</span>'; }
 }
 
@@ -4268,31 +4302,31 @@ function viewAgreement(id) {
   const a = agreements.find(x => x.id === id); if (!a) return;
   const remaining = a.advancePaid && a.advanceAmount ? Math.max(0, parseFloat(a.amount || '0') - parseFloat(a.advanceAmount || '0')) : parseFloat(a.amount || '0');
   const versionHistoryHtml = a.versionHistory && a.versionHistory.length > 0 ?
-    `<div class="modal-section-header">📜 Version History</div>` + a.versionHistory.map(v => `<div style="background:var(--bg-alt);padding:10px;border-radius:8px;margin-bottom:6px;font-size:12px"><strong>v${v.version}</strong> · Changed by ${v.changedBy === 'user' ? '👥 User' : '🛡️ Helper'} · ${fDate(v.changedAt)}${v.fieldsChanged ? `<div style="color:var(--text-mute);margin-top:4px">Fields: ${v.fieldsChanged.join(', ')}</div>` : ''}</div>`).join('') : '';
+    `<div class="modal-section-header">📜 Version History</div>` + a.versionHistory.map(v => `<div style="background:var(--bg-alt);padding:10px;border-radius:8px;margin-bottom:6px;font-size:12px"><strong>v${esc(v.version)}</strong> · Changed by ${v.changedBy === 'user' ? '👥 User' : '🛡️ Helper'} · ${fDate(v.changedAt)}${v.fieldsChanged ? `<div style="color:var(--text-mute);margin-top:4px">Fields: ${esc(v.fieldsChanged.join(', '))}</div>` : ''}</div>`).join('') : '';
   showModal(
-    `<div class="modal-header"><div class="modal-title">📋 ${a.agreementId || 'Agreement'}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">📋 ${esc(a.agreementId || 'Agreement')}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <div class="modal-section-header">📝 Summary</div>
-      ${mf('Agreement ID', `<code>${a.agreementId || a.id}</code>`)}
+      ${mfRaw('Agreement ID', `<code>${esc(a.agreementId || a.id)}</code>`)}
       ${mf('Initiator', a.initiator === 'user' ? '👥 User started this' : '🛡️ Helper started this')}
-      ${mf('Status', `<span class="badge badge-${a.status === 'accepted' ? 'approved' : a.status === 'rejected' || a.status === 'disputed' ? 'rejected' : 'pending'}">${a.status || 'pending'}</span>`)}
+      ${mfRaw('Status', `<span class="badge badge-${a.status === 'accepted' ? 'approved' : a.status === 'rejected' || a.status === 'disputed' ? 'rejected' : 'pending'}">${esc(a.status || 'pending')}</span>`)}
       ${a.currentVersion > 1 ? mf('Version', `v${a.currentVersion}`) : ''}
       <div class="modal-section-header">👥 Parties</div>
-      ${mf('User', `${a.userName || '—'} · ${a.userPhone || '—'}<br><code>${a.userId || ''}</code>`)}
-      ${mf('Helper', `${a.helperName || '—'} · ${a.helperPhone || '—'}<br><code>${a.helperId || ''}</code>`)}
+      ${mfRaw('User', `${esc(a.userName || '—')} · ${esc(a.userPhone || '—')}<br><code>${esc(a.userId || '')}</code>`)}
+      ${mfRaw('Helper', `${esc(a.helperName || '—')} · ${esc(a.helperPhone || '—')}<br><code>${esc(a.helperId || '')}</code>`)}
       <div class="modal-section-header">🛠️ Service Details</div>
       ${mf('Category', (a.category || '—').replace('_', ' '))}
-      ${mf('Task', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px;white-space:pre-wrap">${a.taskDescription || '—'}</div>`)}
+      ${mfRaw('Task', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px;white-space:pre-wrap">${esc(a.taskDescription || '—')}</div>`)}
       ${mf('Location', `📍 ${a.location || '—'}`)}
       ${mf('Date', a.date || '—')}
       ${mf('Start Time', a.startTime || '—')}
       ${mf('Duration', `${a.durationHours || '—'} hour(s)`)}
-      ${a.isUrgent ? mf('Urgency', '<span class="badge badge-danger">🚨 URGENT</span>') : ''}
+      ${a.isUrgent ? mfRaw('Urgency', '<span class="badge badge-danger">🚨 URGENT</span>') : ''}
       <div class="modal-section-header">💰 Payment Terms</div>
-      ${mf('Amount', `<strong>₹${parseFloat(a.amount || '0').toLocaleString('en-IN')}</strong>`)}
+      ${mfRaw('Amount', `<strong>₹${parseFloat(a.amount || '0').toLocaleString('en-IN')}</strong>`)}
       ${mf('Method', (a.paymentMethod || '—').toUpperCase())}
       ${mf('Advance Paid', a.advancePaid ? `Yes — ₹${a.advanceAmount}` : 'No')}
-      ${mf('Remaining Due', `<strong>₹${remaining.toLocaleString('en-IN')}</strong>`)}
+      ${mfRaw('Remaining Due', `<strong>₹${remaining.toLocaleString('en-IN')}</strong>`)}
       <div class="modal-section-header">📋 Conditions</div>
       ${mf('Materials Included', a.materialsIncluded ? '✅ Yes' : '❌ No')}
       ${mf('Transport Included', a.transportIncluded ? '✅ Yes' : '❌ No')}
@@ -4322,7 +4356,7 @@ function viewAgreement(id) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
-      ${a.status !== 'disputed' ? `<button class="btn btn-warning btn-sm" onclick="markAgreementDisputed('${a.id}')">⚠️ Flag as Disputed</button>` : `<button class="btn btn-success btn-sm" onclick="resolveAgreementDispute('${a.id}')">✅ Mark Dispute Resolved</button>`}
+      ${a.status !== 'disputed' ? `<button class="btn btn-warning btn-sm" onclick="markAgreementDisputed(${jsArg(a.id)})">⚠️ Flag as Disputed</button>` : `<button class="btn btn-success btn-sm" onclick="resolveAgreementDispute(${jsArg(a.id)})">✅ Mark Dispute Resolved</button>`}
     </div>`
   );
 }
@@ -4406,12 +4440,12 @@ function renderRestrictions() {
     : `<table class="table"><thead><tr><th>State</th><th>District / City</th><th>Status</th><th>Enabled By</th><th>When</th><th>Actions</th></tr></thead><tbody>` + allRegions.map(r => {
     const cfg = REGION_STATUS_LABELS[r.status] || REGION_STATUS_LABELS.disabled;
     return `<tr>
-      <td><strong>${r.state || '—'}</strong></td>
-      <td>${r.district || r.city || '<i style="color:var(--text-mute)">Entire state</i>'}</td>
+      <td><strong>${esc(r.state || '—')}</strong></td>
+      <td>${(r.district || r.city) ? esc(r.district || r.city) : '<i style="color:var(--text-mute)">Entire state</i>'}</td>
       <td><span class="badge badge-${cfg.color}">${cfg.emoji} ${cfg.label}</span></td>
-      <td>${r.enabledBy || 'Admin'}</td>
+      <td>${esc(r.enabledBy || 'Admin')}</td>
       <td>${r.autoEnabled ? '<i style="color:var(--text-mute)">Built-in</i>' : fDate(r.enabledAt)}</td>
-      <td>${r.autoEnabled ? '<span style="font-size:11px;color:var(--text-mute)">Cannot disable default region</span>' : `<button class="btn btn-ghost btn-sm" onclick="changeRegionStatus('${r.id}')">Change Status</button> <button class="btn btn-danger btn-sm" onclick="removeEnabledRegion('${r.id}')">🗑️ Remove</button>`}</td>
+      <td>${r.autoEnabled ? '<span style="font-size:11px;color:var(--text-mute)">Cannot disable default region</span>' : `<button class="btn btn-ghost btn-sm" onclick="changeRegionStatus(${jsArg(r.id)})">Change Status</button> <button class="btn btn-danger btn-sm" onclick="removeEnabledRegion(${jsArg(r.id)})">🗑️ Remove</button>`}</td>
     </tr>`;
   }).join('') + `</tbody></table>`;
 
@@ -4426,13 +4460,13 @@ function renderRestrictions() {
       if (r.districts?.length) areaParts.push(...r.districts.slice(0, 2));
       else if (r.states?.length) areaParts.push(...r.states.slice(0, 2));
       return `<tr>
-        <td><strong>${r.title || '—'}</strong><br><span class="user-meta">${(r.reason || '').substring(0, 60)}</span></td>
-        <td><span class="badge badge-${sevClass}">${(r.severity || 'info').toUpperCase()}</span></td>
-        <td>${areaParts.join(', ') || '—'}</td>
+        <td><strong>${esc(r.title || '—')}</strong><br><span class="user-meta">${esc((r.reason || '').substring(0, 60))}</span></td>
+        <td><span class="badge badge-${sevClass}">${esc((r.severity || 'info').toUpperCase())}</span></td>
+        <td>${esc(areaParts.join(', ') || '—')}</td>
         <td><span class="badge badge-info">${audLabel}</span></td>
         <td>${isLockdown ? '<span class="badge badge-danger">🔒 Lockdown</span>' : `${disabled.length} features`}</td>
         <td>${r.endsAt ? fDate(r.endsAt) : '<i style="color:var(--text-mute)">Until resumed</i>'}</td>
-        <td><button class="btn btn-success btn-sm" onclick="resumeRestriction('${r.id}')">▶️ Resume</button> <button class="btn btn-ghost btn-sm" onclick="viewRestriction('${r.id}')">👁 View</button></td>
+        <td><button class="btn btn-success btn-sm" onclick="resumeRestriction(${jsArg(r.id)})">▶️ Resume</button> <button class="btn btn-ghost btn-sm" onclick="viewRestriction(${jsArg(r.id)})">👁 View</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 
@@ -4440,7 +4474,7 @@ function renderRestrictions() {
     `<table class="table"><thead><tr><th>Title</th><th>Severity</th><th>Area</th><th>Status</th><th>Created</th><th>Ended</th><th>Actions</th></tr></thead><tbody>` + ended.map(r => {
       const sevClass = r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info';
       const areaParts = (r.districts && r.districts.length) ? r.districts.slice(0, 2) : (r.states && r.states.length ? r.states.slice(0, 2) : []);
-      return `<tr><td>${r.title || '—'}</td><td><span class="badge badge-${sevClass}">${(r.severity || 'info').toUpperCase()}</span></td><td>${areaParts.join(', ') || '—'}</td><td><span class="badge badge-gray">${r.status || 'ended'}</span></td><td>${fDate(r.createdAt)}</td><td>${fDate(r.resumedAt || r.endedAt)}</td><td><button class="btn btn-ghost btn-sm" onclick="viewRestriction('${r.id}')">👁 View</button></td></tr>`;
+      return `<tr><td>${esc(r.title || '—')}</td><td><span class="badge badge-${sevClass}">${esc((r.severity || 'info').toUpperCase())}</span></td><td>${esc(areaParts.join(', ') || '—')}</td><td><span class="badge badge-gray">${esc(r.status || 'ended')}</span></td><td>${fDate(r.createdAt)}</td><td>${fDate(r.resumedAt || r.endedAt)}</td><td><button class="btn btn-ghost btn-sm" onclick="viewRestriction(${jsArg(r.id)})">👁 View</button></td></tr>`;
     }).join('') + `</tbody></table>`;
 }
 
@@ -4489,11 +4523,11 @@ function submitEnableRegion() {
 function changeRegionStatus(id) {
   const r = enabledRegions.find(x => x.id === id); if (!r) return;
   showModal(
-    `<div class="modal-header"><div class="modal-title">Change Status: ${r.state}${r.district ? ' / ' + r.district : ''}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">Change Status: ${esc(r.state)}${r.district ? ' / ' + esc(r.district) : ''}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <div class="modal-field"><div class="modal-label">New Status</div><select id="cs-status" class="form-select"><option value="active" ${r.status === 'active' ? 'selected' : ''}>✅ Active</option><option value="pilot" ${r.status === 'pilot' ? 'selected' : ''}>🧪 Pilot</option><option value="coming_soon" ${r.status === 'coming_soon' ? 'selected' : ''}>🔜 Coming Soon</option><option value="maintenance" ${r.status === 'maintenance' ? 'selected' : ''}>🔧 Maintenance</option><option value="disabled" ${r.status === 'disabled' ? 'selected' : ''}>🚫 Disabled</option></select></div>
     </div>
-    <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitChangeRegionStatus('${id}')">Update</button></div>`
+    <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitChangeRegionStatus(${jsArg(id)})">Update</button></div>`
   );
 }
 
@@ -4641,21 +4675,21 @@ function viewRestriction(id) {
   const areaLabel = (r.districts && r.districts.length > 0) ? r.districts.join(', ') : (r.states || []).join(', ');
   const featureRows = FEATURE_KEYS.map(f => `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px"><span>${f.label}</span><span style="font-weight:700;color:${features[f.key] === false ? 'var(--danger)' : 'var(--success)'}">${features[f.key] === false ? '🚫 Disabled' : '✅ Enabled'}</span></div>`).join('');
   showModal(
-    `<div class="modal-header"><div class="modal-title">🚧 ${r.title || 'Restriction'}</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">🚧 ${esc(r.title || 'Restriction')}</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      ${mf('Severity', `<span class="badge badge-${r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info'}">${(r.severity || 'info').toUpperCase()}</span>`)}
-      ${mf('Status', `<span class="badge badge-${r.status === 'active' ? 'danger' : 'gray'}">${r.status || 'unknown'}</span>`)}
-      ${mf('Audience', `<span class="badge badge-info">${audLabel}</span>`)}
+      ${mfRaw('Severity', `<span class="badge badge-${r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warning' : 'info'}">${esc((r.severity || 'info').toUpperCase())}</span>`)}
+      ${mfRaw('Status', `<span class="badge badge-${r.status === 'active' ? 'danger' : 'gray'}">${esc(r.status || 'unknown')}</span>`)}
+      ${mfRaw('Audience', `<span class="badge badge-info">${audLabel}</span>`)}
       ${mf('Area', areaLabel || '—')}
-      ${mf('Reason', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px">${r.reason || '—'}</div>`)}
+      ${mfRaw('Reason', `<div style="background:var(--bg-alt);padding:10px;border-radius:8px">${esc(r.reason || '—')}</div>`)}
       ${mf('Started', fDate(r.createdAt))}
-      ${mf('Ends', r.endsAt ? fDate(r.endsAt) : '<i>Until manually resumed</i>')}
+      ${mfRaw('Ends', r.endsAt ? fDate(r.endsAt) : '<i>Until manually resumed</i>')}
       ${r.resumedAt ? mf('Resumed', `${fDate(r.resumedAt)} by ${r.resumedBy || 'Admin'}`) : ''}
       ${mf('Created By', r.createdBy || 'Admin')}
       ${features.fullLockdown === false ? '<div style="background:var(--danger-light);padding:12px;border-radius:8px;margin:12px 0;border-left:3px solid var(--danger);font-weight:700;color:var(--danger)">🔒 FULL LOCKDOWN — All features disabled</div>' : ''}
       <div class="modal-section-header">🔧 Feature Status</div><div>${featureRows}</div>
     </div>
-    <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Close</button>${r.status === 'active' ? `<button class="btn btn-success" onclick="resumeRestriction('${r.id}');closeModal()">▶️ Resume Now</button>` : ''}</div>`
+    <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Close</button>${r.status === 'active' ? `<button class="btn btn-success" onclick="resumeRestriction(${jsArg(r.id)});closeModal()">▶️ Resume Now</button>` : ''}</div>`
   );
 }
 
@@ -4699,14 +4733,14 @@ function renderLocationRequests() {
       const proofCount = (r.proofUrls || []).length;
       const reasonLabel = (r.reasonCategory || '').replace(/_/g, ' ');
       return `<tr>
-        <td><div style="font-weight:700">${r.helperName || '—'}</div><div class="user-meta">🛡️ Helper · ID: ${(r.helperId || '').substring(0, 8)}...</div></td>
-        <td><div>${r.currentDistrict || '—'}</div><div class="user-meta">${r.currentState || ''}</div></td>
-        <td><div style="color:var(--primary);font-weight:700">→ ${r.newDistrict || '—'}</div><div class="user-meta">${r.newState || ''}${r.newCity ? ' · ' + r.newCity : ''}</div></td>
-        <td><div style="text-transform:capitalize">${reasonLabel || '—'}</div><div class="user-meta">${proofCount} proof${proofCount !== 1 ? 's' : ''}</div></td>
-        <td>${r.helperTrustScore ? `${r.helperTrustScore}/100` : '—'}</td>
+        <td><div style="font-weight:700">${esc(r.helperName || '—')}</div><div class="user-meta">🛡️ Helper · ID: ${esc((r.helperId || '').substring(0, 8))}...</div></td>
+        <td><div>${esc(r.currentDistrict || '—')}</div><div class="user-meta">${esc(r.currentState || '')}</div></td>
+        <td><div style="color:var(--primary);font-weight:700">→ ${esc(r.newDistrict || '—')}</div><div class="user-meta">${esc(r.newState || '')}${r.newCity ? ' · ' + esc(r.newCity) : ''}</div></td>
+        <td><div style="text-transform:capitalize">${esc(reasonLabel || '—')}</div><div class="user-meta">${esc(proofCount)} proof${proofCount !== 1 ? 's' : ''}</div></td>
+        <td>${r.helperTrustScore ? `${esc(r.helperTrustScore)}/100` : '—'}</td>
         <td>${fDate(r.createdAt)}</td>
         <td><span class="badge badge-${cfg.color}">${cfg.emoji} ${cfg.label}</span></td>
-        <td><button class="btn btn-primary btn-sm" onclick="viewLocationRequest('${r.id}')">Review</button></td>
+        <td><button class="btn btn-primary btn-sm" onclick="viewLocationRequest(${jsArg(r.id)})">Review</button></td>
       </tr>`;
     }).join('') + `</tbody></table>`;
 }
@@ -4717,7 +4751,7 @@ function viewLocationRequest(id) {
   const helperFull = helpers.find(h => h.id === r.helperId) || {};
   const previousChanges = locationRequests.filter(lr => lr.helperId === r.helperId && lr.id !== r.id).slice(0, 5);
   const proofGallery = (r.proofUrls || []).length > 0
-    ? `<div class="lb-gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-top:8px">${(r.proofUrls || []).map((url, i) => `<div class="lb-thumb" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none;cursor:zoom-in"><img src="${url}" alt="Proof ${i + 1}" style="width:100%;height:140px;object-fit:cover;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">🔍 Proof ${i + 1} · Click to view</div></div>`).join('')}</div>`
+    ? `<div class="lb-gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-top:8px">${(r.proofUrls || []).map((url, i) => `<div class="lb-thumb" style="display:block;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-alt);text-decoration:none;cursor:zoom-in"><img src="${safeUrl(url)}" alt="Proof ${i + 1}" style="width:100%;height:140px;object-fit:cover;display:block"/><div style="padding:6px;font-size:11px;color:var(--text-sec);text-align:center">🔍 Proof ${i + 1} · Click to view</div></div>`).join('')}</div>`
     : '<div style="color:var(--text-mute);font-style:italic;padding:8px">No documents uploaded</div>';
   const showActions = r.status === 'pending' || r.status === 'info_requested';
   showModal(
@@ -4727,7 +4761,7 @@ function viewLocationRequest(id) {
       <div class="modal-section-header">👤 Account</div>
       ${mf('Name', r.helperName || '—')}
       ${mf('Account Type', '🛡️ Helper')}
-      ${mf('Account ID', `<code style="background:var(--bg-alt);padding:2px 6px;border-radius:4px">${r.helperId || ''}</code>`)}
+      ${mfRaw('Account ID', `<code style="background:var(--bg-alt);padding:2px 6px;border-radius:4px">${esc(r.helperId || '')}</code>`)}
       ${r.helperPhone ? mf('Phone', r.helperPhone) : ''}
       ${typeof r.helperRating === 'number' ? mf('Rating', `⭐ ${r.helperRating.toFixed(1)}/5`) : ''}
       ${typeof r.helperTrustScore === 'number' ? mf('Trust Score', `🏆 ${r.helperTrustScore}/100`) : ''}
@@ -4735,23 +4769,23 @@ function viewLocationRequest(id) {
       ${helperFull.verificationStatus ? mf('Verified', helperFull.verificationStatus === 'verified' ? '✅ Yes' : '⏳ Pending') : ''}
       <div class="modal-section-header">🗺️ Location Change</div>
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;background:var(--bg-alt);padding:14px;border-radius:8px;margin-bottom:12px">
-        <div><div style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:0.5px;font-weight:700">From</div><div style="font-weight:800;margin-top:4px">${r.currentDistrict || '—'}</div><div style="font-size:12px;color:var(--text-sec)">${r.currentState || ''}</div>${r.currentVillage ? `<div style="font-size:11px;color:var(--text-mute);margin-top:2px">${r.currentVillage}</div>` : ''}</div>
+        <div><div style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:0.5px;font-weight:700">From</div><div style="font-weight:800;margin-top:4px">${esc(r.currentDistrict || '—')}</div><div style="font-size:12px;color:var(--text-sec)">${esc(r.currentState || '')}</div>${r.currentVillage ? `<div style="font-size:11px;color:var(--text-mute);margin-top:2px">${esc(r.currentVillage)}</div>` : ''}</div>
         <div style="font-size:24px;color:var(--primary)">→</div>
-        <div><div style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:0.5px;font-weight:700">To</div><div style="font-weight:800;color:var(--primary);margin-top:4px">${r.newDistrict || '—'}</div><div style="font-size:12px;color:var(--text-sec)">${r.newState || ''}${r.newCity ? ' · ' + r.newCity : ''}</div>${r.newVillage ? `<div style="font-size:11px;color:var(--text-mute);margin-top:2px">${r.newVillage}</div>` : ''}</div>
+        <div><div style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:0.5px;font-weight:700">To</div><div style="font-weight:800;color:var(--primary);margin-top:4px">${esc(r.newDistrict || '—')}</div><div style="font-size:12px;color:var(--text-sec)">${esc(r.newState || '')}${r.newCity ? ' · ' + esc(r.newCity) : ''}</div>${r.newVillage ? `<div style="font-size:11px;color:var(--text-mute);margin-top:2px">${esc(r.newVillage)}</div>` : ''}</div>
       </div>
       <div class="modal-section-header">📝 Reason</div>
-      ${mf('Category', `<span style="text-transform:capitalize">${(r.reasonCategory || '').replace(/_/g, ' ')}</span>`)}
-      <div style="background:var(--bg-alt);padding:12px;border-radius:8px;font-size:13px;line-height:1.6;margin-bottom:12px;border-left:3px solid var(--primary)">${(r.reason || 'No detailed reason provided').replace(/\n/g, '<br>')}</div>
-      <div class="modal-section-header">📄 Proof Documents (${(r.proofUrls || []).length})</div>
-      ${(r.proofTypes && r.proofTypes.length > 0) ? `<div style="font-size:12px;color:var(--text-sec);margin-bottom:6px">Document type: <strong>${r.proofTypes[0]}</strong></div>` : ''}
+      ${mfRaw('Category', `<span style="text-transform:capitalize">${esc((r.reasonCategory || '').replace(/_/g, ' '))}</span>`)}
+      <div style="background:var(--bg-alt);padding:12px;border-radius:8px;font-size:13px;line-height:1.6;margin-bottom:12px;border-left:3px solid var(--primary)">${esc(r.reason || 'No detailed reason provided').replace(/\n/g, '<br>')}</div>
+      <div class="modal-section-header">📄 Proof Documents (${esc((r.proofUrls || []).length)})</div>
+      ${(r.proofTypes && r.proofTypes.length > 0) ? `<div style="font-size:12px;color:var(--text-sec);margin-bottom:6px">Document type: <strong>${esc(r.proofTypes[0])}</strong></div>` : ''}
       ${proofGallery}
-      ${previousChanges.length > 0 ? `<div class="modal-section-header" style="margin-top:16px">📜 Previous Location Changes</div><div style="background:var(--bg-alt);border-radius:8px;padding:8px">${previousChanges.map(p => { const pcfg = LR_STATUS[p.status] || LR_STATUS.pending; return `<div style="display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px"><div>${p.currentDistrict} → <strong>${p.newDistrict}</strong></div><div style="display:flex;gap:6px;align-items:center"><span class="badge badge-${pcfg.color}" style="font-size:9px">${pcfg.emoji} ${pcfg.label}</span><span style="color:var(--text-mute)">${fDate(p.createdAt)}</span></div></div>`; }).join('')}</div>` : ''}
-      ${r.adminNote ? `<div class="modal-section-header" style="margin-top:16px">💬 Previous Admin Note</div><div style="background:var(--warning-light);padding:10px;border-radius:8px;font-size:13px;border-left:3px solid var(--warning)">${r.adminNote}${r.reviewedBy ? `<div style="font-size:11px;color:var(--text-mute);margin-top:4px">— ${r.reviewedBy} on ${fDate(r.reviewedAt)}</div>` : ''}</div>` : ''}
+      ${previousChanges.length > 0 ? `<div class="modal-section-header" style="margin-top:16px">📜 Previous Location Changes</div><div style="background:var(--bg-alt);border-radius:8px;padding:8px">${previousChanges.map(p => { const pcfg = LR_STATUS[p.status] || LR_STATUS.pending; return `<div style="display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px"><div>${esc(p.currentDistrict)} → <strong>${esc(p.newDistrict)}</strong></div><div style="display:flex;gap:6px;align-items:center"><span class="badge badge-${pcfg.color}" style="font-size:9px">${pcfg.emoji} ${pcfg.label}</span><span style="color:var(--text-mute)">${fDate(p.createdAt)}</span></div></div>`; }).join('')}</div>` : ''}
+      ${r.adminNote ? `<div class="modal-section-header" style="margin-top:16px">💬 Previous Admin Note</div><div style="background:var(--warning-light);padding:10px;border-radius:8px;font-size:13px;border-left:3px solid var(--warning)">${esc(r.adminNote)}${r.reviewedBy ? `<div style="font-size:11px;color:var(--text-mute);margin-top:4px">— ${esc(r.reviewedBy)} on ${fDate(r.reviewedAt)}</div>` : ''}</div>` : ''}
       ${showActions ? `<div class="modal-section-header" style="margin-top:16px">⚖️ Admin Decision</div><div class="modal-field"><div class="modal-label">Admin Comment (Required)</div><textarea id="lr-admin-note" class="form-textarea" placeholder="Explain your decision (required for approve/reject/request more info)..." maxlength="500"></textarea></div>` : ''}
     </div>
     <div class="modal-footer" style="${showActions ? '' : 'justify-content:flex-end'}">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
-      ${showActions ? `<button class="btn btn-warning" onclick="decideLocationRequest('${r.id}','info_requested')">❓ Request More Info</button><button class="btn btn-danger" onclick="decideLocationRequest('${r.id}','rejected')">❌ Reject</button><button class="btn btn-success" onclick="decideLocationRequest('${r.id}','approved')">✅ Approve</button>` : ''}
+      ${showActions ? `<button class="btn btn-warning" onclick="decideLocationRequest(${jsArg(r.id)},'info_requested')">❓ Request More Info</button><button class="btn btn-danger" onclick="decideLocationRequest(${jsArg(r.id)},'rejected')">❌ Reject</button><button class="btn btn-success" onclick="decideLocationRequest(${jsArg(r.id)},'approved')">✅ Approve</button>` : ''}
     </div>`
   );
 }
@@ -4788,7 +4822,7 @@ function decideLocationRequest(id, decision) {
 function exportLocationRequests() {
   const rows = [['ID', 'Helper Name', 'Helper ID', 'Phone', 'Current State', 'Current District', 'New State', 'New District', 'New City', 'Reason Category', 'Reason', 'Status', 'Trust Score', 'Submitted', 'Reviewed By', 'Reviewed At', 'Admin Note']];
   locationRequests.forEach(r => rows.push([r.id, r.helperName || '', r.helperId || '', r.helperPhone || '', r.currentState || '', r.currentDistrict || '', r.newState || '', r.newDistrict || '', r.newCity || '', r.reasonCategory || '', (r.reason || '').replace(/[\r\n,]/g, ' '), r.status || '', r.helperTrustScore || '', fDate(r.createdAt), r.reviewedBy || '', r.reviewedAt ? fDate(r.reviewedAt) : '', (r.adminNote || '').replace(/[\r\n,]/g, ' ')]));
-  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csv = rows.map(r => r.map(c => `"${csvSafe(c).replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -4875,8 +4909,8 @@ function renderRegions() {
   document.getElementById('region-grid').innerHTML = sorted.length === 0 ?
     '<div class="table-empty"><div class="table-empty-emoji">🗺️</div><div class="table-empty-title">No regional data yet</div><div class="table-empty-sub">Register users with state info to see breakdown</div></div>' :
     sorted.map(([name, s]) => `
-    <div class="region-card" onclick="drillIntoState('${name.replace(/'/g, "\\'")}')">
-      <div class="region-name">${name === 'Unknown' ? '❓ Unknown' : '📍 ' + name}</div>
+    <div class="region-card" onclick="drillIntoState(${jsArg(name)})">
+      <div class="region-name">${name === 'Unknown' ? '❓ Unknown' : '📍 ' + esc(name)}</div>
       <div style="font-size:11px;color:var(--text-mute);margin-bottom:8px">${s.districts.size} district${s.districts.size !== 1 ? 's' : ''}</div>
       <div class="region-stats">
         <div class="region-stat"><span class="region-stat-val">${s.users}</span>Users</div>
@@ -4904,19 +4938,19 @@ function drillIntoState(stateName) {
   const sortedDist = Object.entries(districtStats).sort((a,b) => (b[1].users + b[1].helpers) - (a[1].users + a[1].helpers));
 
   showModal(
-    `<div class="modal-header"><div class="modal-title">📍 ${stateName} — District Breakdown</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    `<div class="modal-header"><div class="modal-title">📍 ${esc(stateName)} — District Breakdown</div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       ${sortedDist.length === 0 ? '<div class="table-empty">No district data for this state</div>' :
         `<table class="table"><thead><tr><th>District</th><th>Users</th><th>Helpers</th><th>Total</th><th>Actions</th></tr></thead><tbody>` +
         sortedDist.map(([d, s]) => `
           <tr>
-            <td><strong>${d}</strong></td>
+            <td><strong>${esc(d)}</strong></td>
             <td>${s.users}</td>
             <td style="color:var(--purple)">${s.helpers}</td>
             <td><strong>${s.users + s.helpers}</strong></td>
             <td>
-              <button class="btn btn-ghost btn-sm" onclick="filterUsersByDistrict('${stateName.replace(/'/g, "\\'")}','${d.replace(/'/g, "\\'")}');closeModal()">👥 Users</button>
-              <button class="btn btn-ghost btn-sm" onclick="filterHelpersByDistrict('${stateName.replace(/'/g, "\\'")}','${d.replace(/'/g, "\\'")}');closeModal()">🛡️ Helpers</button>
+              <button class="btn btn-ghost btn-sm" onclick="filterUsersByDistrict(${jsArg(stateName)},${jsArg(d)});closeModal()">👥 Users</button>
+              <button class="btn btn-ghost btn-sm" onclick="filterHelpersByDistrict(${jsArg(stateName)},${jsArg(d)});closeModal()">🛡️ Helpers</button>
             </td>
           </tr>
         `).join('') + `</tbody></table>`
@@ -4976,7 +5010,7 @@ function renderModeration() {
 
   const lowRated = helpers.filter(h => (h.rating || 0) > 0 && (h.rating || 0) < 3 && (h.totalRatings || 0) >= 2);
   document.getElementById('moderation-complained').innerHTML = lowRated.length === 0 ? '<div class="table-empty">No problematic helpers</div>' :
-    `<table class="table"><thead><tr><th>Helper</th><th>Rating</th><th>Reviews</th><th>Cancellation Rate</th><th>Actions</th></tr></thead><tbody>${lowRated.map(h => `<tr><td>${h.name || '—'}</td><td style="color:var(--danger)">⭐ ${Number(h.rating).toFixed(1)}</td><td>${h.totalRatings || 0}</td><td>${Math.round((h.cancellationRate || 0) * 100)}%</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper('${h.id}')">Review</button></td></tr>`).join('')}</tbody></table>`;
+    `<table class="table"><thead><tr><th>Helper</th><th>Rating</th><th>Reviews</th><th>Cancellation Rate</th><th>Actions</th></tr></thead><tbody>${lowRated.map(h => `<tr><td>${esc(h.name || '—')}</td><td style="color:var(--danger)">⭐ ${Number(h.rating).toFixed(1)}</td><td>${esc(h.totalRatings || 0)}</td><td>${Math.round((h.cancellationRate || 0) * 100)}%</td><td><button class="btn btn-primary btn-sm" onclick="viewHelper(${jsArg(h.id)})">Review</button></td></tr>`).join('')}</tbody></table>`;
 }
 
 // ── Broadcast (Pan-India) ──
@@ -5087,7 +5121,7 @@ function logAudit(action, details, module, prevValue, updatedValue) {
 
 function renderAuditLogs() {
   document.getElementById('audit-logs').innerHTML = auditLogs.length === 0 ? '<div class="table-empty"><div class="table-empty-emoji">📜</div><div class="table-empty-title">No audit logs</div><div class="table-empty-sub">Admin actions will appear here</div></div>' :
-    auditLogs.map(log => `<div class="audit-row"><div class="audit-icon">⚙️</div><div class="audit-content"><span class="audit-actor">${log.adminName || log.adminEmail}</span> ${log.action}: <em>${log.details}</em><div class="audit-meta">${fDate(log.timestamp)}</div></div></div>`).join('');
+    auditLogs.map(log => `<div class="audit-row"><div class="audit-icon">⚙️</div><div class="audit-content"><span class="audit-actor">${esc(log.adminName || log.adminEmail)}</span> ${esc(log.action)}: <em>${esc(log.details)}</em><div class="audit-meta">${fDate(log.timestamp)}</div></div></div>`).join('');
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -5190,7 +5224,7 @@ function _actFill(id, values, current) {
   const el = document.getElementById(id); if (!el) return;
   const keep = current || el.value || 'all';
   const first = el.options.length ? el.options[0].outerHTML : '<option value="all">All</option>';
-  el.innerHTML = first + values.map(v => `<option value="${v}">${v}</option>`).join('');
+  el.innerHTML = first + values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
   el.value = values.indexOf(keep) >= 0 ? keep : 'all';
 }
 
@@ -5275,8 +5309,8 @@ function renderActivity() {
         <div style="display:flex;align-items:center;gap:10px">
           <span style="width:9px;height:9px;border-radius:50%;background:${e.p.online ? 'var(--success)' : 'var(--text-mute)'};flex:none"></span>
           <div style="flex:1;min-width:0">
-            <div style="font-weight:700">${e.name} ${e.deleted ? '<span class="badge badge-pending" style="font-size:10px">deleted</span>' : ''}</div>
-            <div style="font-size:12px;color:var(--text-sec)">${e.email} · ${e.role}</div>
+            <div style="font-weight:700">${esc(e.name)} ${e.deleted ? '<span class="badge badge-pending" style="font-size:10px">deleted</span>' : ''}</div>
+            <div style="font-size:12px;color:var(--text-sec)">${esc(e.email)} · ${esc(e.role)}</div>
           </div>
           <div style="text-align:right">
             <div style="font-weight:800;font-size:18px">${e.total}</div>
@@ -5284,7 +5318,7 @@ function renderActivity() {
           </div>
         </div>
         <div style="font-size:11.5px;color:var(--text-sec);margin-top:6px">
-          ${e.p.online ? '🟢 Online · on <b>' + e.p.currentPage + '</b>' : '⚪ Offline · last active ' + (e.p.last ? fDate({ toMillis: () => e.p.last }) : '—')}
+          ${e.p.online ? '🟢 Online · on <b>' + esc(e.p.currentPage) + '</b>' : '⚪ Offline · last active ' + (e.p.last ? fDate({ toMillis: () => e.p.last }) : '—')}
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:11px">
           ${[['Verifications', e.verif], ['Reviews', e.reviews], ['Alerts', e.alerts], ['Reports', e.reports], ['Broadcasts', e.broadcasts], ['Regions', e.regions]]
@@ -5300,10 +5334,10 @@ function renderActivity() {
       <div class="audit-row">
         <div class="audit-icon">${actionType(l.action) === 'Failed login' ? '🚫' : actionType(l.action) === 'Login' ? '🔑' : '⚙️'}</div>
         <div class="audit-content">
-          <span class="audit-actor">${l.employeeName || l.adminName || l.adminEmail}</span>
+          <span class="audit-actor">${esc(l.employeeName || l.adminName || l.adminEmail)}</span>
           <span class="badge badge-info" style="font-size:10px;margin:0 4px">${actionType(l.action)}</span>
-          ${l.action}${l.details ? ': <em>' + l.details + '</em>' : ''}
-          <div class="audit-meta">${fDate(l.timestamp)} · ${l.role || '—'}${l.module ? ' · ' + l.module : ''}${l.ip ? ' · IP ' + l.ip : ''}</div>
+          ${esc(l.action)}${l.details ? ': <em>' + esc(l.details) + '</em>' : ''}
+          <div class="audit-meta">${fDate(l.timestamp)} · ${esc(l.role || '—')}${l.module ? ' · ' + esc(l.module) : ''}${l.ip ? ' · IP ' + esc(l.ip) : ''}</div>
         </div>
       </div>`).join('');
 }
@@ -5311,7 +5345,7 @@ function renderActivity() {
 function exportActivityCSV() {
   const rows = window._activityFiltered || [];
   const headers = ['Timestamp', 'Employee', 'Email', 'Role', 'Action Type', 'Action', 'Module', 'Details', 'Previous', 'Updated', 'IP', 'Device'];
-  const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const esc = v => '"' + csvSafe(v == null ? '' : v).replace(/"/g, '""') + '"';
   const body = rows.map(l => [
     fDate(l.timestamp), l.employeeName || l.adminName || '', l.adminEmail || '', l.role || '',
     actionType(l.action), l.action || '', l.module || '', l.details || '',
@@ -5353,7 +5387,7 @@ function exportCSV(type) {
       ['Total Reviews', reviews.length],
     ];
   }
-  const csv = [headers.join(','), ...data.map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n');
+  const csv = [headers.join(','), ...data.map(row => row.map(c => `"${csvSafe(c).replace(/"/g, '""')}"`).join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -5381,7 +5415,13 @@ function fDate(ts) {
   catch { return '—'; }
 }
 function mf(label, value) {
-  return `<div class="modal-field"><div class="modal-label">${label}</div><div class="modal-value">${value}</div></div>`;
+  return `<div class="modal-field"><div class="modal-label">${label}</div><div class="modal-value">${esc(value)}</div></div>`;
+}
+// mf() HTML-escapes its value. mfRaw() is ONLY for callers that pass trusted,
+// already-escaped HTML (badges, <code>, links, <strong>) — escape any data
+// inside that HTML with esc()/safeUrl() before handing it over.
+function mfRaw(label, html) {
+  return `<div class="modal-field"><div class="modal-label">${label}</div><div class="modal-value">${html}</div></div>`;
 }
 function empty(emoji, title, sub) {
   return `<div class="table-empty"><div class="table-empty-emoji">${emoji}</div><div class="table-empty-title">${title}</div><div class="table-empty-sub">${sub}</div></div>`;
@@ -5884,7 +5924,7 @@ function empty(emoji, title, sub) {
         '<h2 style="margin:12px 0 6px">Access Denied</h2>' +
         '<p style="color:var(--text-sec);margin-bottom:6px">You don\'t have permission to access <b>' + esc(label) + '</b>.</p>' +
         '<p style="color:var(--text-mute);font-size:12px;margin-bottom:18px">Need it for your work? Request access and a Super Admin will review it.</p>' +
-        (mod ? '<button class="btn btn-primary" onclick="rbacRequestAccess(\'' + mod + '\')">🙋 Request Access</button>' : '') +
+        (mod ? '<button class="btn btn-primary" onclick="rbacRequestAccess(' + jsArg(mod) + ')">🙋 Request Access</button>' : '') +
         '</div>';
       document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
       el.classList.add('active');
@@ -5976,18 +6016,18 @@ function empty(emoji, title, sub) {
     const parts = [];
     if ((regions.states || []).length) parts.push(regions.states.slice(0, 2).join(', ') + (regions.states.length > 2 ? ' +' + (regions.states.length - 2) : ''));
     if ((regions.districts || []).length) parts.push('(' + regions.districts.length + ' dist.)');
-    return '<span class="badge badge-info">📍 ' + parts.join(' ') + '</span>';
+    return '<span class="badge badge-info">📍 ' + esc(parts.join(' ')) + '</span>';
   }
   function roleBadge(roleId) {
     const r = RBAC.roleById(roleId);
-    if (!r) return '<span class="badge badge-gray">' + (roleId || '—') + '</span>';
-    return '<span class="badge badge-' + (r.color || 'gray') + '">' + r.label + (r.builtin ? '' : ' ✦') + '</span>';
+    if (!r) return '<span class="badge badge-gray">' + esc(roleId || '—') + '</span>';
+    return '<span class="badge badge-' + esc(r.color || 'gray') + '">' + esc(r.label) + (r.builtin ? '' : ' ✦') + '</span>';
   }
   function permCount(perms) {
     if (!perms) return 0;
     return Object.keys(perms).filter(k => perms[k] && Object.keys(perms[k]).length).length;
   }
-  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
   // ════════ RENDER ════════
   window.rbacSetTab = function (tab) { RBAC.tab = tab; renderRBAC(); };
@@ -6027,7 +6067,7 @@ function empty(emoji, title, sub) {
             const initials = (e.name || e.email || '?').substring(0, 2).toUpperCase();
             const statusBadge = (e.status || 'active') === 'active' ? '<span class="badge badge-success">✅ Active</span>' : '<span class="badge badge-warning">⛔ ' + esc(e.status) + '</span>';
             return '<tr>' +
-              '<td><div class="user-cell"><div class="user-avatar">' + (e.photoURL ? '<img src="' + esc(e.photoURL) + '" style="width:100%;height:100%;border-radius:50%;object-fit:cover"/>' : initials) + '</div>' +
+              '<td><div class="user-cell"><div class="user-avatar">' + (safeUrl(e.photoURL) ? '<img src="' + safeUrl(e.photoURL) + '" style="width:100%;height:100%;border-radius:50%;object-fit:cover"/>' : esc(initials)) + '</div>' +
               '<div class="user-info"><div class="user-name">' + esc(e.name || 'Unnamed') + '</div><div class="user-meta">' + esc(e.email) + '</div></div></div></td>' +
               '<td><code>' + esc(e.employeeId || '—') + '</code></td>' +
               '<td>' + esc(e.designation || '—') + '<div class="user-meta">' + esc(e.department || '') + '</div></td>' +
@@ -6035,7 +6075,7 @@ function empty(emoji, title, sub) {
               '<td>' + regionSummary(e.assignedRegions) + '</td>' +
               '<td>' + statusBadge + '</td>' +
               '<td>' + (e.lastLogin ? fDate(e.lastLogin) : '<span class="user-meta">Never</span>') + '</td>' +
-              '<td><button class="btn btn-primary btn-sm" onclick="rbacManageEmployee(\'' + esc(e.id) + '\')">Manage</button></td>' +
+              '<td><button class="btn btn-primary btn-sm" onclick="rbacManageEmployee(' + jsArg(e.id) + ')">Manage</button></td>' +
               '</tr>';
           }).join('') + '</tbody></table>')) +
       '</div></div>';
@@ -6044,7 +6084,7 @@ function empty(emoji, title, sub) {
   }
 
   function roleOptions(selected) {
-    return RBAC.roles.map(r => '<option value="' + r.id + '"' + (r.id === selected ? ' selected' : '') + '>' + esc(r.label) + (r.builtin ? '' : ' (custom)') + '</option>').join('');
+    return RBAC.roles.map(r => '<option value="' + esc(r.id) + '"' + (r.id === selected ? ' selected' : '') + '>' + esc(r.label) + (r.builtin ? '' : ' (custom)') + '</option>').join('');
   }
   function regionPickerHtml(regions) {
     regions = regions || { states: [], districts: [] };
@@ -6085,8 +6125,8 @@ function empty(emoji, title, sub) {
     showModal(
       '<div class="modal-header"><div class="modal-title">👤 ' + esc(e.name || 'Employee') + '</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
       '<div class="modal-body">' +
-      mfInput('Full Name', 'rbac-f-name', 'text', e.name) + mf('Email', '<code>' + esc(e.email) + '</code>') +
-      mfInput('Phone', 'rbac-f-phone', 'text', e.phone) + mf('Employee ID', '<code>' + esc(e.employeeId || '—') + '</code>') +
+      mfInput('Full Name', 'rbac-f-name', 'text', e.name) + mfRaw('Email', '<code>' + esc(e.email) + '</code>') +
+      mfInput('Phone', 'rbac-f-phone', 'text', e.phone) + mfRaw('Employee ID', '<code>' + esc(e.employeeId || '—') + '</code>') +
       mfInput('Designation', 'rbac-f-desig', 'text', e.designation) + mfInput('Department', 'rbac-f-dept', 'text', e.department) +
       mfInput('Profile Picture URL', 'rbac-f-photo', 'text', e.photoURL) +
       '<div class="modal-field"><div class="modal-label">Role</div><select id="rbac-f-role" class="form-select"' + (canEdit ? '' : ' disabled') + '>' + roleOptions(e.role) + '</select></div>' +
@@ -6097,14 +6137,14 @@ function empty(emoji, title, sub) {
       '</div>' +
       '<div class="modal-footer">' +
       '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
-      '<button class="btn btn-ghost btn-sm" onclick="rbacResetPassword(\'' + esc(e.email) + '\')">🔑 Reset Password</button>' +
-      (RBAC.isSuper() ? '<button class="btn btn-ghost btn-sm" onclick="rbacForcePasswordChange(\'' + esc(e.email) + '\')">🔁 Force Change</button>' : '') +
-      (RBAC.isSuper() ? '<button class="btn btn-warning btn-sm" onclick="rbacForceLogout(\'' + esc(e.email) + '\')">🚪 Force Logout</button>' : '') +
+      '<button class="btn btn-ghost btn-sm" onclick="rbacResetPassword(' + jsArg(e.email) + ')">🔑 Reset Password</button>' +
+      (RBAC.isSuper() ? '<button class="btn btn-ghost btn-sm" onclick="rbacForcePasswordChange(' + jsArg(e.email) + ')">🔁 Force Change</button>' : '') +
+      (RBAC.isSuper() ? '<button class="btn btn-warning btn-sm" onclick="rbacForceLogout(' + jsArg(e.email) + ')">🚪 Force Logout</button>' : '') +
       (canEdit ? (active
-        ? '<button class="btn btn-warning btn-sm" onclick="rbacSetStatus(\'' + esc(id) + '\',\'suspended\')">⛔ Suspend</button>'
-        : '<button class="btn btn-success btn-sm" onclick="rbacSetStatus(\'' + esc(id) + '\',\'active\')">✅ Activate</button>') : '') +
-      (canDelete ? '<button class="btn btn-danger btn-sm" onclick="rbacDeleteEmployee(\'' + esc(id) + '\')">🗑 Delete</button>' : '') +
-      (canEdit ? '<button class="btn btn-primary" onclick="rbacSaveEmployee(\'' + esc(id) + '\')">💾 Save</button>' : '') +
+        ? '<button class="btn btn-warning btn-sm" onclick="rbacSetStatus(' + jsArg(id) + ',\'suspended\')">⛔ Suspend</button>'
+        : '<button class="btn btn-success btn-sm" onclick="rbacSetStatus(' + jsArg(id) + ',\'active\')">✅ Activate</button>') : '') +
+      (canDelete ? '<button class="btn btn-danger btn-sm" onclick="rbacDeleteEmployee(' + jsArg(id) + ')">🗑 Delete</button>' : '') +
+      (canEdit ? '<button class="btn btn-primary" onclick="rbacSaveEmployee(' + jsArg(id) + ')">💾 Save</button>' : '') +
       '</div>'
     );
   };
@@ -6142,9 +6182,9 @@ function empty(emoji, title, sub) {
         showModal(
           '<div class="modal-header"><div class="modal-title">✅ Employee Created</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
           '<div class="modal-body"><p style="margin-bottom:12px">Share these credentials securely. The employee must change the password on first login.</p>' +
-          mf('Employee ID', '<code>' + esc((res && res.employeeId) || '—') + '</code>') +
-          mf('Login (email)', '<code>' + esc(targetEmail) + '</code>') +
-          mf('Temporary Password', '<code>' + esc(tempPass) + '</code>') +
+          mfRaw('Employee ID', '<code>' + esc((res && res.employeeId) || '—') + '</code>') +
+          mfRaw('Login (email)', '<code>' + esc(targetEmail) + '</code>') +
+          mfRaw('Temporary Password', '<code>' + esc(tempPass) + '</code>') +
           '</div><div class="modal-footer"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>'
         );
       } else {
@@ -6186,7 +6226,7 @@ function empty(emoji, title, sub) {
       showModal(
         '<div class="modal-header"><div class="modal-title">🔑 Password Reset</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
         '<div class="modal-body"><p style="margin-bottom:12px">Share this securely. <b>' + esc(email) + '</b> must change it on next login.</p>' +
-        mf('Temporary Password', '<code>' + esc(tempPass) + '</code>') +
+        mfRaw('Temporary Password', '<code>' + esc(tempPass) + '</code>') +
         '</div><div class="modal-footer"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>'
       );
     } catch (e) { showToast('Error: ' + (e.message || 'failed'), 'error'); }
@@ -6221,8 +6261,8 @@ function empty(emoji, title, sub) {
       '<div class="card-body"><div class="region-grid">' +
       RBAC.roles.map(r => {
         const acts = !r.isSuper ? Object.values(r.permissions || {}).reduce((n, p) => n + Object.keys(p).length, 0) : '∞';
-        return '<div class="region-card" onclick="rbacViewRole(\'' + r.id + '\')">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center"><span class="badge badge-' + (r.color || 'gray') + '">' + esc(r.label) + '</span>' + (r.builtin ? '<span class="badge badge-gray" style="font-size:9px">Built-in</span>' : '<span class="badge badge-primary" style="font-size:9px">Custom</span>') + '</div>' +
+        return '<div class="region-card" onclick="rbacViewRole(' + jsArg(r.id) + ')">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center"><span class="badge badge-' + esc(r.color || 'gray') + '">' + esc(r.label) + '</span>' + (r.builtin ? '<span class="badge badge-gray" style="font-size:9px">Built-in</span>' : '<span class="badge badge-primary" style="font-size:9px">Custom</span>') + '</div>' +
           '<div style="font-size:12px;color:var(--text-sec);margin:8px 0;min-height:32px">' + esc(r.desc || '') + '</div>' +
           '<div class="region-stats"><div class="region-stat"><span class="region-stat-val">' + (r.isSuper ? '29' : permCount(r.permissions)) + '</span>Modules</div><div class="region-stat"><span class="region-stat-val">' + acts + '</span>Permissions</div></div>' +
           '</div>';
@@ -6235,8 +6275,8 @@ function empty(emoji, title, sub) {
       '<div class="modal-header"><div class="modal-title">🎭 ' + esc(r.label) + '</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
       '<div class="modal-body">' + (r.isSuper ? '<div class="modal-value">Full unrestricted access to all modules and actions.</div>' : permMatrixView(r.permissions)) + '</div>' +
       '<div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
-      (canEdit ? '<button class="btn btn-primary" onclick="rbacEditRole(\'' + id + '\')">✏️ Edit</button>' : '') +
-      (!r.builtin && RBAC.can('user_role_management', 'delete') ? '<button class="btn btn-danger" onclick="rbacDeleteRole(\'' + id + '\')">🗑 Delete</button>' : '') + '</div>'
+      (canEdit ? '<button class="btn btn-primary" onclick="rbacEditRole(' + jsArg(id) + ')">✏️ Edit</button>' : '') +
+      (!r.builtin && RBAC.can('user_role_management', 'delete') ? '<button class="btn btn-danger" onclick="rbacDeleteRole(' + jsArg(id) + ')">🗑 Delete</button>' : '') + '</div>'
     );
   };
   function permMatrixView(perms) {
@@ -6261,7 +6301,7 @@ function empty(emoji, title, sub) {
       '<div class="modal-body">' + mfInput('Role Name *', 'rbac-role-name', 'text', r.label) + mfInput('Description', 'rbac-role-desc', 'text', r.desc) +
       '<div class="modal-field"><div class="modal-label">Badge Colour</div><select id="rbac-role-color" class="form-select">' + ['primary', 'success', 'warning', 'danger', 'info', 'purple', 'gray'].map(c => '<option value="' + c + '"' + (c === r.color ? ' selected' : '') + '>' + c + '</option>').join('') + '</select></div>' +
       '<div class="modal-label" style="margin-top:8px">Module Permissions</div>' + body + '</div>' +
-      '<div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="rbacSaveRole(' + (id ? '\'' + id + '\'' : 'null') + ')">💾 Save Role</button></div>'
+      '<div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="rbacSaveRole(' + (id ? jsArg(id) : 'null') + ')">💾 Save Role</button></div>'
     );
   };
   window.rbacSaveRole = async function (id) {
@@ -6311,10 +6351,10 @@ function empty(emoji, title, sub) {
         return '<tr><td>' + esc(r.name || r.email) + '<br><span class="user-meta">' + esc(r.email) + '</span></td>' +
           '<td>' + esc(r.moduleLabel || r.module) + '</td>' +
           '<td style="max-width:280px">' + esc(r.reason || '') + '</td>' +
-          '<td><span class="badge ' + sb + '">' + st + '</span></td>' +
+          '<td><span class="badge ' + sb + '">' + esc(st) + '</span></td>' +
           '<td>' + (r.requestedAt ? fDate(r.requestedAt) : '—') + '</td>' +
           '<td>' + (st === 'pending' && canDecide
-            ? '<button class="btn btn-success btn-sm" onclick="rbacDecideAccess(\'' + r.id + '\',\'approved\')">✅ Approve</button> <button class="btn btn-danger btn-sm" onclick="rbacDecideAccess(\'' + r.id + '\',\'rejected\')">❌ Reject</button>'
+            ? '<button class="btn btn-success btn-sm" onclick="rbacDecideAccess(' + jsArg(r.id) + ',\'approved\')">✅ Approve</button> <button class="btn btn-danger btn-sm" onclick="rbacDecideAccess(' + jsArg(r.id) + ',\'rejected\')">❌ Reject</button>'
             : '—') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>';
   }
@@ -6332,9 +6372,9 @@ function empty(emoji, title, sub) {
     showModal(
       '<div class="modal-header"><div class="modal-title">🙋 Request Access</div><button class="modal-close" onclick="closeModal()">×</button></div>' +
       '<div class="modal-body">' +
-      mf('Module Requested', '<b>' + esc(label) + '</b>') +
+      mfRaw('Module Requested', '<b>' + esc(label) + '</b>') +
       '<div class="modal-field"><div class="modal-label">Reason for Access *</div><textarea id="rbac-ar-reason" class="form-textarea" placeholder="Explain why you need access to this module…"></textarea></div>' +
-      '</div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="rbacSubmitAccessRequest(\'' + moduleKey + '\')">Submit Request</button></div>'
+      '</div><div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="rbacSubmitAccessRequest(' + jsArg(moduleKey) + ')">Submit Request</button></div>'
     );
   };
   window.rbacSubmitAccessRequest = async function (moduleKey) {
@@ -6455,7 +6495,7 @@ function renderIssues() {
   statsEl.innerHTML = cards.map(function (s) {
     return '<div class="stat-card"><div class="stat-card-head"><div class="stat-label">' + s.label +
       '</div><div class="stat-icon" style="background:var(--' + s.bg + '-light);color:var(--' + s.bg + ')">' + s.icon +
-      '</div></div><div class="stat-value">' + s.val + '</div></div>';
+      '</div></div><div class="stat-value">' + esc(s.val) + '</div></div>';
   }).join('');
 
   // Module filter options (built from live data, keeps current selection).
@@ -6508,12 +6548,12 @@ function renderIssues() {
               '<div style="font-size:11px;color:var(--text-mute)">' + esc(i.shortId || i.id) + (i.screen ? ' · ' + esc(i.screen) : '') + '</div></td>' +
             '<td>' + esc(i.platform || '—') + '</td>' +
             '<td>' + esc(i.module || 'Other') + '</td>' +
-            '<td>' + (i.count || 0) + '</td>' +
-            '<td>' + (i.userCount != null ? i.userCount : '—') + '</td>' +
+            '<td>' + esc(i.count || 0) + '</td>' +
+            '<td>' + esc(i.userCount != null ? i.userCount : '—') + '</td>' +
             '<td style="font-size:11.5px">' + fDate(i.lastSeen) + '</td>' +
             '<td style="font-size:11.5px">' + esc(i.assignedToName || i.assignedTo || '—') + '</td>' +
             '<td>' + _statusPill(i.status || 'open') + '</td>' +
-            '<td><button class="btn btn-ghost btn-sm" onclick="openIssueDetail(\'' + i.id + '\')">Open</button></td>' +
+            '<td><button class="btn btn-ghost btn-sm" onclick="openIssueDetail(' + jsArg(i.id) + ')">Open</button></td>' +
           '</tr>';
         }).join('') + '</tbody></table>';
   }
@@ -6545,7 +6585,7 @@ function renderIssuesInbox() {
     unread.map(function (n) {
       return '<div class="card" style="margin-bottom:6px;border-left:3px solid var(--danger)"><div class="card-body" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px">' +
         '<div><b style="font-size:12.5px">' + esc(n.title || '') + '</b><div style="font-size:11.5px;color:var(--text-sec)">' + esc(n.body || '') + '</div></div>' +
-        (n.issueDocId ? '<button class="btn btn-ghost btn-sm" onclick="openIssueDetail(\'' + esc(n.issueDocId) + '\')">View</button>' : '') +
+        (n.issueDocId ? '<button class="btn btn-ghost btn-sm" onclick="openIssueDetail(' + jsArg(n.issueDocId) + ')">View</button>' : '') +
         '</div></div>';
     }).join('');
   renderIssues();
@@ -6580,7 +6620,7 @@ function openIssueDetail(id) {
     var stat = i.status || 'open';
     var statusBtns = Object.keys(ISSUE_STATUS).map(function (s) {
       var on = s === stat;
-      return '<button class="btn btn-sm ' + (on ? 'btn-primary' : 'btn-ghost') + '" onclick="issueSetStatus(\'' + id + '\',\'' + s + '\')">' + ISSUE_STATUS[s].label + '</button>';
+      return '<button class="btn btn-sm ' + (on ? 'btn-primary' : 'btn-ghost') + '" onclick="issueSetStatus(' + jsArg(id) + ',\'' + s + '\')">' + ISSUE_STATUS[s].label + '</button>';
     }).join(' ');
     var sevOpts = Object.keys(ISSUE_SEV).map(function (p) {
       return '<option value="' + p + '"' + ((i.priority || 'low') === p ? ' selected' : '') + '>' + ISSUE_SEV[p].label + '</option>';
@@ -6600,7 +6640,7 @@ function openIssueDetail(id) {
             infoRow('Module', esc(i.module || 'Other')) +
             infoRow('Screen', esc(i.screen || '—')) +
             infoRow('Culprit', esc(i.culprit || '—')) +
-            infoRow('Occurrences', (i.count || 0) + ' events · ' + (i.userCount != null ? i.userCount + ' users' : 'users —')) +
+            infoRow('Occurrences', esc(i.count || 0) + ' events · ' + (i.userCount != null ? esc(i.userCount) + ' users' : 'users —')) +
           '</div>' +
           '<div style="flex:1;min-width:260px">' +
             infoRow('First seen', fDate(i.firstSeen)) +
@@ -6609,23 +6649,23 @@ function openIssueDetail(id) {
             infoRow('OS', esc(i.os || '—')) +
             infoRow('Sentry User', esc(i.sentryUserId || '—')) +
             infoRow('Source', esc(i.source || '—')) +
-            infoRow('Sentry', i.permalink ? '<a href="' + esc(i.permalink) + '" target="_blank" rel="noopener">Open in Sentry ↗</a>' : '—') +
+            infoRow('Sentry', i.permalink ? '<a href="' + safeUrl(i.permalink) + '" target="_blank" rel="noopener noreferrer">Open in Sentry ↗</a>' : '—') +
           '</div>' +
         '</div>' +
         (i.stack
           ? '<div style="font-weight:600;font-size:12px;margin:8px 0 4px">Stack trace</div><pre style="background:#0F172A;color:#E2E8F0;font-size:11px;padding:10px;border-radius:8px;max-height:180px;overflow:auto;white-space:pre-wrap">' + esc(i.stack) + '</pre>'
           : (i.sentryIssueId
-            ? '<div style="margin:8px 0"><button class="btn btn-ghost btn-sm" id="issue-full-report-btn" onclick="issueLoadFullReport(\'' + id + '\',\'' + esc(String(i.sentryIssueId)) + '\')">⤓ Load full error report (stack trace, device, OS)</button></div>'
+            ? '<div style="margin:8px 0"><button class="btn btn-ghost btn-sm" id="issue-full-report-btn" onclick="issueLoadFullReport(' + jsArg(id) + ',' + jsArg(String(i.sentryIssueId)) + ')">⤓ Load full error report (stack trace, device, OS)</button></div>'
             : '')) +
         '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;align-items:flex-end">' +
           '<div style="flex:1;min-width:220px"><div class="modal-label">Assign to employee</div><select id="issue-assign-sel" class="form-input">' + empOpts + '</select></div>' +
           '<div style="min-width:140px"><div class="modal-label">Priority</div><select id="issue-priority-sel" class="form-input">' + sevOpts + '</select></div>' +
-          '<button class="btn btn-primary" onclick="issueApplyAssignment(\'' + id + '\')">Save</button>' +
+          '<button class="btn btn-primary" onclick="issueApplyAssignment(' + jsArg(id) + ')">Save</button>' +
         '</div>' +
         '<div class="modal-label" style="margin-bottom:6px">Status</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">' + statusBtns + '</div>' +
         '<div class="modal-label">Internal comments</div>' +
         '<div id="issue-comments" style="max-height:160px;overflow:auto;margin:6px 0"><div style="color:var(--text-mute);font-size:12px">Loading…</div></div>' +
-        '<div style="display:flex;gap:8px"><input id="issue-comment-input" class="form-input" placeholder="Add a note for the team…"/><button class="btn btn-primary" onclick="issueAddComment(\'' + id + '\')">Post</button></div>' +
+        '<div style="display:flex;gap:8px"><input id="issue-comment-input" class="form-input" placeholder="Add a note for the team…"/><button class="btn btn-primary" onclick="issueAddComment(' + jsArg(id) + ')">Post</button></div>' +
       '</div>'
     );
     _issueLoadComments(id);
@@ -6780,7 +6820,7 @@ function issuesExportCSV() {
     return [i.shortId || i.id, i.title || '', i.priority || '', i.status || '', i.platform || '', i.module || '', i.screen || '', i.count || 0, i.userCount != null ? i.userCount : '', fDate(i.firstSeen), fDate(i.lastSeen), i.assignedTo || '', i.permalink || ''];
   });
   var csv = [headers.join(',')].concat(rows.map(function (r) {
-    return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+    return r.map(function (c) { return '"' + csvSafe(c).replace(/"/g, '""') + '"'; }).join(',');
   })).join('\n');
   var blob = new Blob([csv], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
@@ -6875,10 +6915,10 @@ function renderSafety() {
             '<td>' + (SAFETY_SRC[i.source] || esc(i.source || '—')) + '</td>' +
             '<td style="max-width:280px"><div style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(i.contentText || '') + '">' + esc((i.contentText || '').slice(0, 80)) + '</div></td>' +
             '<td style="font-size:12px">' + esc(i.accountName || i.accountId || '—') + '<div style="font-size:10px;color:var(--text-mute)">' + esc(i.accountType || '') + ' · ' + esc(i.accountStatus || '') + '</div></td>' +
-            '<td>' + ((i.priorViolations || 0) >= 1 ? '<span class="badge" style="background:var(--warning-light);color:var(--warning)">' + i.priorViolations + '×</span>' : '0') + '</td>' +
+            '<td>' + ((i.priorViolations || 0) >= 1 ? '<span class="badge" style="background:var(--warning-light);color:var(--warning)">' + esc(i.priorViolations) + '×</span>' : '0') + '</td>' +
             '<td style="font-size:11.5px">' + fDate(i.createdAt) + '</td>' +
             '<td>' + _sstatus(i.status || 'new') + '</td>' +
-            '<td><button class="btn btn-ghost btn-sm" onclick="openSafetyIncident(\'' + i.id + '\')">Review</button></td>' +
+            '<td><button class="btn btn-ghost btn-sm" onclick="openSafetyIncident(' + jsArg(i.id) + ')">Review</button></td>' +
           '</tr>';
         }).join('') + '</tbody></table>';
   }
@@ -6908,39 +6948,39 @@ function openSafetyIncident(id) {
             row('Status', _sstatus(i.status || 'new')) +
             row('Account', esc(i.accountName || '—') + ' (' + esc(i.accountId || '—') + ')') +
             row('Account type', esc(i.accountType || '—') + ' · ' + esc(i.accountStatus || '—')) +
-            row('Prior violations', String(i.priorViolations || 0)) +
+            row('Prior violations', esc(i.priorViolations || 0)) +
             row('Assigned to', esc(i.assignedToName || i.assignedTo || '—')) +
           '</div>' +
           '<div style="flex:1;min-width:250px">' +
             row('Source', (SAFETY_SRC[i.source] || esc(i.source || '—')) + (i.screen ? ' · ' + esc(i.screen) : '')) +
             row('Detected', fDate(i.createdAt)) +
-            row('Engine score', String(i.score || 0) + (i.llmVerdict ? ' · AI: ' + esc(i.llmVerdict.severity || '') + ' (' + esc(i.llmVerdict.reason || '') + ')' : '')) +
+            row('Engine score', esc(i.score || 0) + (i.llmVerdict ? ' · AI: ' + esc(i.llmVerdict.severity || '') + ' (' + esc(i.llmVerdict.reason || '') + ')' : '')) +
             row('Content path', '<code style="font-size:10.5px">' + esc(i.contentPath || '—') + '</code>') +
           '</div>' +
         '</div>' +
         '<div class="modal-label" style="margin-bottom:6px">Enforcement actions</div>' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
-          '<button class="btn btn-ghost btn-sm" onclick="safetyWarn(\'' + id + '\')">⚠️ Warn</button>' +
-          (!i.autoHidden && i.contentPath ? '<button class="btn btn-ghost btn-sm" onclick="safetyHide(\'' + id + '\')">🙈 Hide Content</button>' : '') +
-          '<button class="btn btn-ghost btn-sm" onclick="safetyRestrict(\'' + id + '\')">🔇 Restrict Messaging</button>' +
-          '<button class="btn btn-ghost btn-sm" style="color:var(--warning)" onclick="safetySuspend(\'' + id + '\')">⏸ Suspend Account</button>' +
-          '<button class="btn btn-danger btn-sm" onclick="safetyBan(\'' + id + '\')">⛔ Ban Account</button>' +
-          '<button class="btn btn-ghost btn-sm" onclick="safetyEscalate(\'' + id + '\')">📣 Escalate</button>' +
+          '<button class="btn btn-ghost btn-sm" onclick="safetyWarn(' + jsArg(id) + ')">⚠️ Warn</button>' +
+          (!i.autoHidden && i.contentPath ? '<button class="btn btn-ghost btn-sm" onclick="safetyHide(' + jsArg(id) + ')">🙈 Hide Content</button>' : '') +
+          '<button class="btn btn-ghost btn-sm" onclick="safetyRestrict(' + jsArg(id) + ')">🔇 Restrict Messaging</button>' +
+          '<button class="btn btn-ghost btn-sm" style="color:var(--warning)" onclick="safetySuspend(' + jsArg(id) + ')">⏸ Suspend Account</button>' +
+          '<button class="btn btn-danger btn-sm" onclick="safetyBan(' + jsArg(id) + ')">⛔ Ban Account</button>' +
+          '<button class="btn btn-ghost btn-sm" onclick="safetyEscalate(' + jsArg(id) + ')">📣 Escalate</button>' +
         '</div>' +
         '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">' +
           '<div style="flex:1;min-width:200px"><div class="modal-label">Assign to</div><select id="safety-assign-sel" class="form-input">' + empOpts + '</select></div>' +
-          '<button class="btn btn-primary btn-sm" onclick="safetyAssign(\'' + id + '\')">Assign</button>' +
+          '<button class="btn btn-primary btn-sm" onclick="safetyAssign(' + jsArg(id) + ')">Assign</button>' +
         '</div>' +
         '<div class="modal-label" style="margin-bottom:6px">Mark status</div>' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
           Object.keys(SAFETY_STATUS).map(function (s) {
-            return '<button class="btn btn-sm ' + ((i.status || 'new') === s ? 'btn-primary' : 'btn-ghost') + '" onclick="safetySetStatus(\'' + id + '\',\'' + s + '\')">' + SAFETY_STATUS[s].label + '</button>';
+            return '<button class="btn btn-sm ' + ((i.status || 'new') === s ? 'btn-primary' : 'btn-ghost') + '" onclick="safetySetStatus(' + jsArg(id) + ',\'' + s + '\')">' + SAFETY_STATUS[s].label + '</button>';
           }).join(' ') +
         '</div>' +
         '<div class="modal-label">Action history</div><div style="max-height:110px;overflow:auto;margin:6px 0 10px">' + acts + '</div>' +
         '<div class="modal-label">Internal notes</div>' +
         '<div id="safety-notes" style="max-height:130px;overflow:auto;margin:6px 0"><div style="color:var(--text-mute);font-size:12px">Loading…</div></div>' +
-        '<div style="display:flex;gap:8px"><input id="safety-note-input" class="form-input" placeholder="Add an internal note…"/><button class="btn btn-primary" onclick="safetyAddNote(\'' + id + '\')">Post</button></div>' +
+        '<div style="display:flex;gap:8px"><input id="safety-note-input" class="form-input" placeholder="Add an internal note…"/><button class="btn btn-primary" onclick="safetyAddNote(' + jsArg(id) + ')">Post</button></div>' +
       '</div>'
     );
     db.collection('moderationIncidents').doc(id).collection('notes').orderBy('at', 'desc').limit(50).get().then(function (snap) {
@@ -7072,7 +7112,7 @@ function safetyExportCSV() {
   var rows = list.map(function (i) {
     return [i.id, i.severity, i.category, i.source, (i.contentText || '').slice(0, 200), i.accountName || i.accountId || '', i.accountType || '', i.priorViolations || 0, i.status || 'new', i.assignedTo || '', fDate(i.createdAt)];
   });
-  var csv = [headers.join(',')].concat(rows.map(function (r) { return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','); })).join('\n');
+  var csv = [headers.join(',')].concat(rows.map(function (r) { return r.map(function (c) { return '"' + csvSafe(c).replace(/"/g, '""') + '"'; }).join(','); })).join('\n');
   var blob = new Blob([csv], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
