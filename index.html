@@ -2847,8 +2847,36 @@ async function reverseCTIFromAppeal(appealId, role, accountId, adjustmentId) {
   } catch (e) { showToast('Reversal failed: ' + (e.message || e), 'error'); }
 }
 
+// [SEC-2026-11 / KYC-PUB] A user's verification links (selfie / ID proof /
+// residency proof) no longer sit on the profile document, which every app
+// account can read — the server moves them to users/{uid}/private/kyc (owner +
+// staff only). Load that once per user and overlay it, so the review cards
+// below render exactly as before.
+async function hydrateUserKyc(u) {
+  if (u.__kycLoaded) return false;
+  u.__kycLoaded = true;
+  try {
+    const s = await db.collection('users').doc(u.id).collection('private').doc('kyc').get();
+    if (s.exists) { u.__kyc = s.data() || {}; return true; }
+  } catch (e) { console.log('User KYC hydrate failed (showing profile fields only):', e); }
+  return false;
+}
+function withUserKyc(u0) {
+  const pk = u0.__kyc; if (!pk) return u0;
+  const u = Object.assign({}, u0);
+  if (!u.selfieUrl && pk.selfieUrl) u.selfieUrl = pk.selfieUrl;
+  if (pk.idProofUrl && !(u.idProof && u.idProof.url)) u.idProof = Object.assign({ type: pk.idProofType || 'other' }, u.idProof || {}, { url: pk.idProofUrl });
+  if (pk.addressProofUrl && !(u.residencyProof && u.residencyProof.url)) u.residencyProof = Object.assign({ type: pk.addressProofType || 'other' }, u.residencyProof || {}, { url: pk.addressProofUrl });
+  return u;
+}
+
 function viewUser(id) {
-  const u = users.find(x => x.id === id); if (!u) return;
+  const u0 = users.find(x => x.id === id); if (!u0) return;
+  // Load the private KYC doc on first open, then re-render with the links.
+  if (!u0.__kycLoaded) {
+    hydrateUserKyc(u0).then(function (got) { if (got) viewUser(id); });
+  }
+  const u = withUserKyc(u0);
   const userAlerts = alerts.filter(a => a.userId === id);
   const userReports = reports.filter(r => r.reporterId === id);
   // ── Profile vs Search Location resolution ─────────────────────────
