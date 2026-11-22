@@ -2440,7 +2440,13 @@ function updateOverview() {
   const openReportsArr    = reports.filter(r => (r.status||'open') === 'open');
 
   setBadge('badge-helpers', pendingHelpersArr.length);
-  setBadge('badge-verification', pendingVerifyArr.length);
+  // [BADGE-FIX 2026-11-22] The verification badge is part of the per-admin
+  // unread system (READ_CATEGORIES.verification), set everywhere else via
+  // catUnreadCount so it clears as each admin opens items. updateOverview runs
+  // after every listener fires and used to overwrite it with the RAW pending
+  // count (pendingVerifyArr.length), so the badge never cleared once read —
+  // it snapped back to the full pending total. Use the same unread count here.
+  setBadge('badge-verification', catUnreadCount('verification'));
 
   document.getElementById('stats-grid').innerHTML = [
     { label: 'Total Users',          value: users.length,             items: users,             icon: 'users',        tone: 'primary',  navTo: 'users' },
