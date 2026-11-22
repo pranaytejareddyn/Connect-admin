@@ -3045,6 +3045,7 @@ function viewUser(id) {
       <button class="btn btn-warning btn-sm" onclick="userAction(${jsArg(u.id)},'warn')">⚠️ Warn</button>
       ${u.isSuspended ? `<button class="btn btn-success btn-sm" onclick="userAction(${jsArg(u.id)},'unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="userAction(${jsArg(u.id)},'suspend')">⚠️ Suspend</button>`}
       ${u.isBlocked ? `<button class="btn btn-success btn-sm" onclick="userAction(${jsArg(u.id)},'unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="userAction(${jsArg(u.id)},'block')">🚫 Block</button>`}
+      ${(window.RBAC && RBAC.isSuper && RBAC.isSuper()) ? `<button class="btn btn-danger btn-sm" onclick="confirmDeleteAccount('user', ${jsArg(u.id)}, ${jsArg(u.name || '')}, ${jsArg(u.phone || '')})">🗑 Delete</button>` : ''}
     </div>`
   );
 }
@@ -3602,6 +3603,7 @@ function viewHelper(id) {
          <button class="btn btn-danger btn-sm" onclick="helperAction(${jsArg(h.id)},'reject')">❌ Reject</button>` :
         `${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction(${jsArg(h.id)},'unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction(${jsArg(h.id)},'suspend')">⚠️ Suspend</button>`}
          ${h.isBlocked ? `<button class="btn btn-success btn-sm" onclick="helperAction(${jsArg(h.id)},'unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="helperAction(${jsArg(h.id)},'block')">🚫 Block</button>`}`}
+      ${(window.RBAC && RBAC.isSuper && RBAC.isSuper()) ? `<button class="btn btn-danger btn-sm" onclick="confirmDeleteAccount('helper', ${jsArg(h.id)}, ${jsArg(h.name || h.fullName || '')}, ${jsArg(h.phone || '')})">🗑 Delete</button>` : ''}
     </div>`
   );
 }
@@ -5459,6 +5461,61 @@ function mfRaw(label, html) {
 }
 function empty(emoji, title, sub) {
   return `<div class="table-empty"><div class="table-empty-emoji">${emoji}</div><div class="table-empty-title">${title}</div><div class="table-empty-sub">${sub}</div></div>`;
+}
+
+// ── [ACCT-DEL] Permanent account deletion (Super Admin only) ─────────────────
+// Opens a confirmation dialog that FORCES a reason + an explicit acknowledgement
+// before it will call the adminDeleteAccount Cloud Function. The function wipes
+// the account's data, Firebase Auth record and ban ledger, frees the phone to
+// register again, and records the actor + reason in the audit log.
+function confirmDeleteAccount(accountType, uid, name, phone) {
+  if (!(window.RBAC && RBAC.isSuper && RBAC.isSuper())) { showToast('Super Admin access required', 'error'); return; }
+  const who = esc(name || phone || uid);
+  showModal(
+    `<div class="modal-header"><div class="modal-title">🗑 Delete ${esc(accountType)} permanently</div><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div style="background:var(--danger-light);border:1px solid var(--danger);border-radius:10px;padding:14px;margin-bottom:16px">
+        <div style="font-weight:800;color:var(--danger);margin-bottom:6px">⚠️ This cannot be undone</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.5">You are permanently deleting <b>${who}</b> (${esc(phone || '—')}). This removes the profile, photos, verification documents, chats, posts, reviews and sign-in, hides it from everyone in the app, and <b>frees the phone number</b> so it can register again from scratch.</div>
+      </div>
+      <div class="modal-label" style="margin-bottom:6px">Reason for deletion <span style="color:var(--danger)">*</span> <span style="font-weight:400;color:var(--text-mute)">(recorded in the audit log under your name)</span></div>
+      <textarea id="del-reason" rows="3" maxlength="500" oninput="syncDelDeleteBtn()" placeholder="e.g. Test account cleanup, duplicate registration, account holder requested deletion…" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--surface);color:var(--text)"></textarea>
+      <label style="display:flex;align-items:flex-start;gap:9px;margin-top:14px;cursor:pointer;font-size:13px;color:var(--text);line-height:1.45">
+        <input type="checkbox" id="del-ack" onchange="syncDelDeleteBtn()" style="margin-top:2px;width:16px;height:16px;flex:none"/>
+        <span>I understand this permanently deletes the account and all of its data, that it cannot be recovered, and that the phone number will be freed to register again.</span>
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" id="del-confirm-btn" disabled onclick="doDeleteAccount(${jsArg(accountType)}, ${jsArg(uid)})">🗑 Permanently delete</button>
+    </div>`
+  );
+}
+
+// Enable the delete button only once BOTH the acknowledgement is ticked and a
+// real reason (>= 5 chars) is typed.
+function syncDelDeleteBtn() {
+  const ack = document.getElementById('del-ack');
+  const reason = document.getElementById('del-reason');
+  const btn = document.getElementById('del-confirm-btn');
+  if (!btn) return;
+  btn.disabled = !(ack && ack.checked && reason && reason.value.trim().length >= 5);
+}
+
+async function doDeleteAccount(accountType, uid) {
+  const reasonEl = document.getElementById('del-reason');
+  const reason = (reasonEl && reasonEl.value || '').trim();
+  const btn = document.getElementById('del-confirm-btn');
+  if (reason.length < 5) { showToast('Please enter a reason', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    await firebase.app().functions('us-central1').httpsCallable('adminDeleteAccount')({ accountType, uid, reason });
+    closeModal();
+    showToast('🗑 Account permanently deleted', 'success');
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑 Permanently delete'; }
+    showToast((e && e.message) || 'Delete failed', 'error');
+  }
 }
 </script>
 
