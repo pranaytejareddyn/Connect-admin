@@ -3045,7 +3045,7 @@ function viewUser(id) {
       <button class="btn btn-warning btn-sm" onclick="userAction(${jsArg(u.id)},'warn')">⚠️ Warn</button>
       ${u.isSuspended ? `<button class="btn btn-success btn-sm" onclick="userAction(${jsArg(u.id)},'unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="userAction(${jsArg(u.id)},'suspend')">⚠️ Suspend</button>`}
       ${u.isBlocked ? `<button class="btn btn-success btn-sm" onclick="userAction(${jsArg(u.id)},'unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="userAction(${jsArg(u.id)},'block')">🚫 Block</button>`}
-      ${(window.RBAC && RBAC.isSuper && RBAC.isSuper()) ? `<button class="btn btn-danger btn-sm" onclick="confirmDeleteAccount('user', ${jsArg(u.id)}, ${jsArg(u.name || '')}, ${jsArg(u.phone || '')})">🗑 Delete</button>` : ''}
+      ${canDeleteAccount('user') ? `<button class="btn btn-danger btn-sm" onclick="confirmDeleteAccount('user', ${jsArg(u.id)}, ${jsArg(u.name || '')}, ${jsArg(u.phone || '')})">🗑 Delete</button>` : ''}
     </div>`
   );
 }
@@ -3603,7 +3603,7 @@ function viewHelper(id) {
          <button class="btn btn-danger btn-sm" onclick="helperAction(${jsArg(h.id)},'reject')">❌ Reject</button>` :
         `${h.isSuspended ? `<button class="btn btn-success btn-sm" onclick="helperAction(${jsArg(h.id)},'unsuspend')">✓ Unsuspend</button>` : `<button class="btn btn-warning btn-sm" onclick="helperAction(${jsArg(h.id)},'suspend')">⚠️ Suspend</button>`}
          ${h.isBlocked ? `<button class="btn btn-success btn-sm" onclick="helperAction(${jsArg(h.id)},'unblock')">✓ Unblock</button>` : `<button class="btn btn-danger btn-sm" onclick="helperAction(${jsArg(h.id)},'block')">🚫 Block</button>`}`}
-      ${(window.RBAC && RBAC.isSuper && RBAC.isSuper()) ? `<button class="btn btn-danger btn-sm" onclick="confirmDeleteAccount('helper', ${jsArg(h.id)}, ${jsArg(h.name || h.fullName || '')}, ${jsArg(h.phone || '')})">🗑 Delete</button>` : ''}
+      ${canDeleteAccount('helper') ? `<button class="btn btn-danger btn-sm" onclick="confirmDeleteAccount('helper', ${jsArg(h.id)}, ${jsArg(h.name || h.fullName || '')}, ${jsArg(h.phone || '')})">🗑 Delete</button>` : ''}
     </div>`
   );
 }
@@ -5463,13 +5463,22 @@ function empty(emoji, title, sub) {
   return `<div class="table-empty"><div class="table-empty-emoji">${emoji}</div><div class="table-empty-title">${title}</div><div class="table-empty-sub">${sub}</div></div>`;
 }
 
-// ── [ACCT-DEL] Permanent account deletion (Super Admin only) ─────────────────
+// ── [ACCT-DEL] Permanent account deletion ────────────────────────────────────
+// Who can delete: a Super Admin (any account), a Helper Manager (helpers), or a
+// User Manager (users). Mirrors the server-side check in adminDeleteAccount.
 // Opens a confirmation dialog that FORCES a reason + an explicit acknowledgement
 // before it will call the adminDeleteAccount Cloud Function. The function wipes
 // the account's data, Firebase Auth record and ban ledger, frees the phone to
 // register again, and records the actor + reason in the audit log.
+function canDeleteAccount(accountType) {
+  if (!(window.RBAC && RBAC.me)) return false;
+  if (RBAC.isSuper && RBAC.isSuper()) return true;
+  const role = RBAC.me.roleId;
+  return (accountType === 'helper' && role === 'helper_manager')
+      || (accountType === 'user' && role === 'user_manager');
+}
 function confirmDeleteAccount(accountType, uid, name, phone) {
-  if (!(window.RBAC && RBAC.isSuper && RBAC.isSuper())) { showToast('Super Admin access required', 'error'); return; }
+  if (!canDeleteAccount(accountType)) { showToast('You do not have permission to delete this account', 'error'); return; }
   const who = esc(name || phone || uid);
   showModal(
     `<div class="modal-header"><div class="modal-title">🗑 Delete ${esc(accountType)} permanently</div><button class="modal-close" onclick="closeModal()">×</button></div>
