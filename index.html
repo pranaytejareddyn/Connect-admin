@@ -525,6 +525,7 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
     <div class="nav-section" data-nav-module="user_role_management">Administration</div>
     <div class="nav-item" data-page="rbac" data-nav-module="user_role_management"><span class="nav-icon">🔐</span>User &amp; Roles</div>
     <div class="nav-item" data-page="activity" data-nav-super="1"><span class="nav-icon">🕵️</span>Employee Activity</div>
+    <div class="nav-item" data-page="settings" data-nav-super="1"><span class="nav-icon">⚙️</span>Settings</div>
     <div class="sidebar-footer">
       <div>Connect v1.0.0</div>
       <div style="margin-top:4px">🇮🇳 Pan-India Operations</div>
@@ -1064,6 +1065,15 @@ code { font-family: 'JetBrains Mono', 'Courier New', monospace; background: var(
         </div>
       </div>
 
+      <div class="page" id="page-settings">
+        <div class="page-head">
+          <div><div class="page-title">⚙️ Settings</div><div class="page-sub">System configuration</div></div>
+        </div>
+        <div class="card" style="max-width:560px">
+          <div class="card-head"><div><div class="card-title">📲 OTP Rate Limits</div><div class="card-sub">How often a phone number can request a login code.</div></div></div>
+          <div class="card-body" id="otp-settings-body"><div class="table-empty">Loading…</div></div>
+        </div>
+      </div>
       <div class="page" id="page-denied"></div>
     </main>
   </div>
@@ -1450,6 +1460,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'issues') { renderIssues(); issuesMarkInboxSeen(); }
     if (page === 'safety') renderSafety();
     if (page === 'work') renderWorkPosts();
+    if (page === 'settings') renderOtpSettings();
   });
 });
 
@@ -5524,6 +5535,62 @@ async function doDeleteAccount(accountType, uid) {
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = '🗑 Permanently delete'; }
     showToast((e && e.message) || 'Delete failed', 'error');
+  }
+}
+
+// ── [OTP-LIMITS] Settings → OTP Rate Limits (Super Admin) ────────────────────
+// Reads/writes appConfig/auth. The app reads these same fields at OTP time, so a
+// save here changes the live limits the next time each user's app starts — no
+// app rebuild needed. Clamps match the app's own clamps so the two never
+// disagree. appConfig/auth write is allowed for admins by the Firestore rules;
+// this surface is Super-Admin-only on top of that.
+function otpField(id, label, value, range, help) {
+  return `<div>
+    <div class="modal-label" style="margin-bottom:4px">${esc(label)} <span style="font-weight:400;color:var(--text-mute)">(${esc(range)})</span></div>
+    <input id="${id}" type="number" value="${esc(String(value))}" style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)"/>
+    <div style="font-size:11.5px;color:var(--text-mute);margin-top:3px">${esc(help)}</div>
+  </div>`;
+}
+async function renderOtpSettings() {
+  const body = document.getElementById('otp-settings-body');
+  if (!body) return;
+  if (!(window.RBAC && RBAC.isSuper && RBAC.isSuper())) { body.innerHTML = '<div class="table-empty">Super Admin access required.</div>'; return; }
+  let cfg = {};
+  try { const s = await db.collection('appConfig').doc('auth').get(); cfg = (s.exists && s.data()) || {}; } catch (e) {}
+  const num = (v, d) => (typeof v === 'number' && Number.isFinite(v)) ? v : d;
+  const cd = num(cfg.otpCooldownSeconds, 60), ph = num(cfg.otpMaxPerHour, 10), pd = num(cfg.otpMaxPerDay, 20);
+  body.innerHTML =
+    `<div style="display:flex;flex-direction:column;gap:14px;max-width:380px">
+      ${otpField('otp-cd', 'Cooldown between codes (seconds)', cd, '15–600', 'Minimum wait after each code before another can be requested.')}
+      ${otpField('otp-ph', 'Max codes per hour', ph, '1–100', 'Per phone number, over a rolling hour.')}
+      ${otpField('otp-pd', 'Max codes per day', pd, '1–500', 'Per phone number, over a rolling 24 hours.')}
+      <div style="display:flex;gap:8px;margin-top:2px">
+        <button class="btn btn-primary" id="otp-save-btn" onclick="saveOtpSettings()">💾 Save</button>
+        <button class="btn btn-ghost" onclick="renderOtpSettings()">Reset</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-mute);line-height:1.5">These guard against SMS-bombing; Firebase's own server-side limits still apply on top. A change takes effect for each user the next time their app starts.</div>
+    </div>`;
+}
+async function saveOtpSettings() {
+  if (!(window.RBAC && RBAC.isSuper && RBAC.isSuper())) { showToast('Super Admin access required', 'error'); return; }
+  const clamp = (v, min, max) => Math.min(max, Math.max(min, Math.round(v)));
+  const cd = Number((document.getElementById('otp-cd') || {}).value);
+  const ph = Number((document.getElementById('otp-ph') || {}).value);
+  const pd = Number((document.getElementById('otp-pd') || {}).value);
+  if (![cd, ph, pd].every(Number.isFinite)) { showToast('Please enter valid numbers', 'error'); return; }
+  const otpCooldownSeconds = clamp(cd, 15, 600);
+  const otpMaxPerHour = clamp(ph, 1, 100);
+  let otpMaxPerDay = clamp(pd, 1, 500);
+  if (otpMaxPerDay < otpMaxPerHour) otpMaxPerDay = otpMaxPerHour;
+  const btn = document.getElementById('otp-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    await db.collection('appConfig').doc('auth').set({ otpCooldownSeconds, otpMaxPerHour, otpMaxPerDay }, { merge: true });
+    showToast('✓ OTP limits saved', 'success');
+    renderOtpSettings();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Save'; }
+    showToast((e && e.message) || 'Save failed', 'error');
   }
 }
 </script>
